@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>錄音轉文字稿</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <header class="top">
+    <div class="status-row">
+      <span id="dot" class="dot" aria-hidden="true"></span>
+      <span id="status" class="status">尚未開始</span>
+      <span id="elapsed" class="elapsed"></span>
+    </div>
+    <div id="source" class="source"></div>
+    <div class="meter" aria-hidden="true"><div id="meter-fill" class="meter-fill"></div></div>
+    <div class="actions">
+      <select id="language" aria-label="錄音的語言">
+        <option value="en">英文</option>
+        <option value="ja">日文</option>
+      </select>
+      <button id="toggle" class="primary" type="button">開始</button>
+      <button id="copy" type="button">複製</button>
+      <button id="download" type="button">下載 .txt</button>
+      <button id="clear" class="quiet" type="button">清除</button>
+    </div>
+    <p id="message" class="message" hidden></p>
+  </header>
+
+  <main id="transcript" class="transcript" aria-live="polite"></main>
+
+  <section id="empty" class="empty">
+    <p>先在上面選好語言，再到播放錄音的分頁點瀏覽器工具列的 <strong>Tab Transcriber</strong> 圖示，就會開始。</p>
+    <p>每句前面的時間是從開始錄音算起。文字稿只存在這台電腦。</p>
+  </section>
+
+  <script src="sidepanel.js" type="module"></script>
+</body>
+</html>

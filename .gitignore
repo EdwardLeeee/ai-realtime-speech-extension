@@ -1,0 +1,3 @@
+host/.venv/
+__pycache__/
+host/vendor/

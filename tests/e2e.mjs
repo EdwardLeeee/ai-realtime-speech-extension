@@ -1,0 +1,377 @@
+// 端到端測試：用暫時的 Brave 設定檔載入插件，在測試網頁播英文錄音，模擬點插件圖示，最後檢查文字稿。
+//
+// 先執行過 ./install.sh：Brave 只到預設設定資料夾（~/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts）
+// 找本機程式的註冊檔，就算用 --user-data-dir 換了設定檔也一樣（2026-10 在 Brave 155 實測）。
+//
+// 用法：node tests/e2e.mjs --audio <音檔> [--start 60] [--duration 75] [--profile <暫存資料夾>]
+//                          [--lang en|ja] [--browser brave-browser] [--headful] [--shots <截圖資料夾>]
+
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
+import { parseArgs } from 'node:util';
+
+const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+const EXPECTED_ID = 'pclblnfmncjbohcnbhlkgefpdhpljiae';
+
+const { values: opt } = parseArgs({
+  options: {
+    audio: { type: 'string' },
+    start: { type: 'string', default: '60' },
+    duration: { type: 'string', default: '75' },
+    profile: { type: 'string' },
+    browser: { type: 'string', default: 'brave-browser' },
+    headful: { type: 'boolean', default: false },
+    shots: { type: 'string' },
+    lang: { type: 'string', default: 'en' },
+  },
+});
+if (!opt.audio) throw new Error('需要 --audio <音檔>');
+const start = Number(opt.start);
+const duration = Number(opt.duration);
+const t0 = Date.now();
+const log = (...a) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1).padStart(6)}s]`, ...a);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---- 測試網頁＋音檔（支援 Range，讓 <audio> 能跳到指定秒數）----
+const audioBytes = fs.readFileSync(opt.audio);
+const server = http.createServer((req, res) => {
+  if (req.url.startsWith('/audio')) {
+    const range = /bytes=(\d+)-(\d*)/.exec(req.headers.range ?? '');
+    const total = audioBytes.length;
+    const from = range ? Number(range[1]) : 0;
+    const to = range && range[2] ? Number(range[2]) : total - 1;
+    res.writeHead(range ? 206 : 200, {
+      'Content-Type': 'audio/mpeg',
+      'Accept-Ranges': 'bytes',
+      'Content-Length': to - from + 1,
+      ...(range ? { 'Content-Range': `bytes ${from}-${to}/${total}` } : {}),
+    });
+    res.end(audioBytes.subarray(from, to + 1));
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(`<!doctype html><title>English Listening Practice</title>
+<h1>Listening</h1><audio id="a" controls preload="auto" src="/audio#t=${start},${start + duration}"></audio>`);
+});
+await new Promise((r) => server.listen(0, '127.0.0.1', r));
+const pageUrl = `http://127.0.0.1:${server.address().port}/`;
+
+// ---- 暫時的瀏覽器設定檔 ----
+const profile = opt.profile ?? fs.mkdtempSync(path.join(os.tmpdir(), 'tt-e2e-'));
+fs.mkdirSync(profile, { recursive: true });
+
+const browser = spawn(
+  opt.browser,
+  [
+    ...(opt.headful ? [] : ['--headless=new']),
+    `--user-data-dir=${profile}`,
+    '--remote-debugging-port=0',
+    '--enable-unsafe-extension-debugging',
+    '--no-first-run',
+    '--no-default-browser-check',
+    'about:blank',
+  ],
+  // 自成一個 process group，結束時才能整組收掉（見 shutdownBrowser）。
+  { stdio: 'ignore', detached: true },
+);
+const portFile = path.join(profile, 'DevToolsActivePort');
+let wsPath = null;
+for (let i = 0; i < 100 && !wsPath; i++) {
+  await sleep(200);
+  if (fs.existsSync(portFile)) {
+    const [port, p] = fs.readFileSync(portFile, 'utf8').split('\n');
+    if (p) wsPath = `ws://127.0.0.1:${port}${p}`;
+  }
+}
+if (!wsPath) throw new Error('瀏覽器沒有開出除錯埠');
+
+// ---- 最小的 CDP 用戶端 ----
+const ws = new WebSocket(wsPath);
+await new Promise((r, j) => ((ws.onopen = r), (ws.onerror = j)));
+let nextId = 1;
+const waiting = new Map();
+const listeners = [];
+ws.onmessage = (e) => {
+  const msg = JSON.parse(e.data);
+  if (msg.id && waiting.has(msg.id)) {
+    const { resolve, reject } = waiting.get(msg.id);
+    waiting.delete(msg.id);
+    msg.error ? reject(new Error(`${msg.error.message} ${msg.error.data ?? ''}`)) : resolve(msg.result);
+  } else if (msg.method) {
+    listeners.forEach((fn) => fn(msg));
+  }
+};
+const cdp = (method, params = {}, sessionId) =>
+  new Promise((resolve, reject) => {
+    const id = nextId++;
+    waiting.set(id, { resolve, reject });
+    ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+  });
+
+// 把插件各頁（背景程式、錄音頁、側邊欄）的 console 和錯誤印出來，方便除錯。
+const sessionNames = new Map();
+listeners.push((msg) => {
+  const name = sessionNames.get(msg.sessionId);
+  if (!name) return;
+  if (msg.method === 'Runtime.consoleAPICalled') {
+    log(`  <${name}> console.${msg.params.type}:`, msg.params.args.map((a) => a.value ?? a.description).join(' '));
+  } else if (msg.method === 'Runtime.exceptionThrown') {
+    log(`  <${name}> EXCEPTION:`, msg.params.exceptionDetails.exception?.description ?? msg.params.exceptionDetails.text);
+  }
+});
+listeners.push(async (msg) => {
+  if (msg.method !== 'Target.attachedToTarget') return;
+  const { sessionId, targetInfo } = msg.params;
+  if (!targetInfo.url.startsWith(`chrome-extension://${EXPECTED_ID}/`)) {
+    cdp('Runtime.runIfWaitingForDebugger', {}, sessionId).catch(() => {});
+    return;
+  }
+  sessionNames.set(sessionId, path.basename(new URL(targetInfo.url).pathname));
+  await cdp('Runtime.enable', {}, sessionId).catch(() => {});
+  cdp('Runtime.runIfWaitingForDebugger', {}, sessionId).catch(() => {});
+});
+await cdp('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+await cdp('Target.setDiscoverTargets', { discover: true });
+listeners.push((msg) => {
+  if (msg.method === 'Target.targetCreated' && msg.params.targetInfo.url.startsWith(`chrome-extension://${EXPECTED_ID}/`)) {
+    cdp('Target.attachToTarget', { targetId: msg.params.targetInfo.targetId, flatten: true }).catch(() => {});
+  }
+});
+
+async function evaluate(sessionId, expression) {
+  const r = await cdp('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true, userGesture: true }, sessionId);
+  if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
+  return r.result.value;
+}
+async function openTab(url) {
+  const { targetId } = await cdp('Target.createTarget', { url });
+  const { sessionId } = await cdp('Target.attachToTarget', { targetId, flatten: true });
+  await cdp('Runtime.enable', {}, sessionId);
+  for (let i = 0; i < 50; i++) {
+    const ready = await evaluate(sessionId, `location.href === ${JSON.stringify(url)} && document.readyState === 'complete'`).catch(() => false);
+    if (ready) break;
+    await sleep(100);
+  }
+  return { targetId, sessionId };
+}
+
+// brave-browser、google-chrome 是 shell 腳本，啟動瀏覽器時沒有 exec：只 kill 腳本的 PID，瀏覽器會留在背景繼續吃記憶體
+// （2026-10-24 因此殘留 6 個 headless Brave、約 3 GB，最後整台電腦記憶體耗盡）。
+// 所以先用 Browser.close 請瀏覽器自己關，再收掉整個 process group，最後逐一確認沒有程序還帶著這個設定檔。
+function profileProcesses() {
+  const pids = [];
+  for (const d of fs.readdirSync('/proc')) {
+    if (!/^\d+$/.test(d)) continue;
+    if (Number(d) === process.pid) continue;
+    try {
+      const args = fs.readFileSync(`/proc/${d}/cmdline`, 'utf8').split('\0');
+      if (args.includes(`--user-data-dir=${profile}`)) pids.push(Number(d));
+    } catch {}
+  }
+  return pids;
+}
+async function shutdownBrowser() {
+  for (const sig of ['SIGTERM', 'SIGKILL']) {
+    for (let i = 0; i < 25 && profileProcesses().length; i++) await sleep(200);
+    if (!profileProcesses().length) return [];
+    try {
+      process.kill(-browser.pid, sig);
+    } catch {}
+    for (const pid of profileProcesses()) {
+      try {
+        process.kill(pid, sig);
+      } catch {}
+    }
+  }
+  await sleep(500);
+  return profileProcesses();
+}
+
+let failed = false;
+const check = (ok, label) => {
+  log(`${ok ? 'PASS' : 'FAIL'} ${label}`);
+  if (!ok) failed = true;
+};
+
+try {
+  const { id } = await cdp('Extensions.loadUnpacked', { path: path.join(ROOT, 'extension') });
+  check(id === EXPECTED_ID, `插件載入，ID = ${id}`);
+
+  const page = await openTab(pageUrl);
+  await sleep(1500);
+  const played = await evaluate(page.sessionId, `document.getElementById('a').play().then(() => 'playing', (e) => e.message)`);
+  log('測試網頁播放：', played);
+
+  // triggerAction 要的是包住頁面的 tab target，用網址對回去。
+  const { targetInfos } = await cdp('Target.getTargets', { filter: [{ type: 'tab' }] });
+  const tabTarget = targetInfos.find((t) => t.type === 'tab' && t.url === pageUrl);
+  if (!tabTarget) throw new Error('找不到測試網頁的 tab target');
+  // 側邊欄頁面先開好，在裡面設定語言（等於使用者在選單選了語言）。
+  const panel = await openTab(`chrome-extension://${id}/sidepanel.html`);
+  await evaluate(panel.sessionId, `chrome.storage.local.set({ language: ${JSON.stringify(opt.lang)} })`);
+  // 記錄即時字幕每次變化、第一句定稿出現的時間（相對於點圖示）。
+  await evaluate(
+    panel.sessionId,
+    `(() => {
+      window.__captions = [];
+      window.__firstFinal = null;
+      new MutationObserver(() => {
+        const text = document.querySelector('.line.live span')?.textContent;
+        const last = window.__captions.at(-1);
+        if (text && text !== last?.text) window.__captions.push({ t: performance.now(), text });
+        if (!window.__firstFinal && document.querySelector('.line:not(.live)')) window.__firstFinal = performance.now();
+      }).observe(document.getElementById('transcript'), { childList: true, subtree: true, characterData: true });
+    })()`,
+  );
+  // triggerAction 實際作用在視窗目前顯示的分頁，所以先切回測試網頁。
+  await cdp('Target.activateTarget', { targetId: page.targetId });
+  await cdp('Extensions.triggerAction', { id, targetId: tabTarget.targetId });
+  await evaluate(panel.sessionId, `window.__t0 = performance.now()`);
+  log('已模擬點擊插件圖示');
+  const getState = () =>
+    evaluate(
+      panel.sessionId,
+      `Promise.all([chrome.storage.session.get('state'), chrome.storage.local.get('recordings')])
+        .then(([s, l]) => ({ state: s.state ?? {}, recordings: l.recordings ?? [] }))`,
+    );
+
+  let last = '';
+  let meterMax = 0;
+  let warning = '';
+  const deadline = Date.now() + (duration + 5) * 1000;
+  while (Date.now() < deadline) {
+    await sleep(3000);
+    const { state, recordings } = await getState();
+    const segs = recordings.at(-1)?.segments ?? [];
+    const line = `狀態=${state.status} host=${state.host} 模型=${state.model} 排隊=${state.pending} 句數=${segs.length}`;
+    if (line !== last) log(line);
+    last = line;
+    if (state.status === 'error') throw new Error(state.message);
+    if (state.message) warning = state.message;
+    const meter = await evaluate(panel.sessionId, `parseFloat(document.getElementById('meter-fill').style.width) || 0`);
+    meterMax = Math.max(meterMax, meter);
+  }
+  check(!warning, `錄音中沒有警告（${warning || '無'}）`);
+  check(meterMax > 20, `音量條有在動（最高 ${meterMax.toFixed(0)}%）`);
+  if (opt.shots) {
+    fs.mkdirSync(opt.shots, { recursive: true });
+    await cdp('Emulation.setDeviceMetricsOverride', { width: 400, height: 760, deviceScaleFactor: 1, mobile: false }, panel.sessionId);
+    for (const scheme of ['light', 'dark']) {
+      await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] }, panel.sessionId);
+      await sleep(300);
+      const { data } = await cdp('Page.captureScreenshot', { format: 'png' }, panel.sessionId);
+      fs.writeFileSync(path.join(opt.shots, `panel-recording-${scheme}.png`), Buffer.from(data, 'base64'));
+    }
+  }
+
+  const live = await evaluate(
+    panel.sessionId,
+    `({ t0: window.__t0, firstFinal: window.__firstFinal, captions: window.__captions })`,
+  );
+  const caps = live.captions;
+  const gaps = caps.slice(1).map((c, i) => (c.t - caps[i].t) / 1000).sort((a, b) => a - b);
+  const firstCap = caps.length ? (caps[0].t - live.t0) / 1000 : null;
+  const firstFinal = live.firstFinal ? (live.firstFinal - live.t0) / 1000 : null;
+  log(
+    `即時字幕：更新 ${caps.length} 次，第一次在 ${firstCap?.toFixed(1)} 秒；` +
+      `更新間隔中位數 ${gaps.length ? gaps[Math.floor(gaps.length / 2)].toFixed(2) : '-'} 秒；第一句定稿在 ${firstFinal?.toFixed(1)} 秒`,
+  );
+  check(caps.length >= Math.floor(duration / 5), `錄音中有即時字幕（${caps.length} 次更新）`);
+  check(firstCap !== null && (firstFinal === null || firstCap < firstFinal), '即時字幕比定稿先出現');
+  log('按側邊欄的「停止」');
+  await evaluate(panel.sessionId, `document.getElementById('toggle').click()`);
+  let final;
+  for (let i = 0; i < 120; i++) {
+    await sleep(1000);
+    final = await getState();
+    if (final.state.status === 'idle' || final.state.status === 'error') break;
+  }
+  check(final.state.status === 'idle', `停止後回到待命（狀態=${final.state.status}，訊息=${final.state.message || '無'}）`);
+  const contexts = await cdp('Target.getTargets');
+  const offscreenLeft = contexts.targetInfos.some((t) => t.url.endsWith('/offscreen.html'));
+  check(!offscreenLeft, '停止後錄音頁已關閉');
+
+  // README 的換語言流程：圖示點過的分頁，在側邊欄換語言後按「開始」要能直接錄。
+  const other = opt.lang === 'ja' ? 'en' : 'ja';
+  await cdp('Target.activateTarget', { targetId: page.targetId });
+  await evaluate(
+    panel.sessionId,
+    `(() => { const s = document.getElementById('language'); s.value = ${JSON.stringify(other)}; s.dispatchEvent(new Event('change')); })()`,
+  );
+  await sleep(300);
+  await evaluate(panel.sessionId, `document.getElementById('toggle').click()`);
+  let again;
+  for (let i = 0; i < 20; i++) {
+    await sleep(500);
+    again = (await getState()).state;
+    if (again.status === 'recording' || again.status === 'error') break;
+  }
+  check(
+    again.status === 'recording' && again.language === other,
+    `換成 ${other} 後在側邊欄按開始可以直接錄（狀態=${again.status}${again.message ? '，' + again.message : ''}）`,
+  );
+  await evaluate(panel.sessionId, `document.getElementById('toggle').click()`);
+  for (let i = 0; i < 30; i++) {
+    await sleep(500);
+    if ((await getState()).state.status === 'idle') break;
+  }
+
+  // 在不能錄音的頁面（側邊欄本身這個分頁）按開始，要出現白話提示，而且不會卡在錄音中。
+  await cdp('Target.activateTarget', { targetId: panel.targetId });
+  await evaluate(panel.sessionId, `document.getElementById('toggle').click()`);
+  let bad;
+  for (let i = 0; i < 20; i++) {
+    await sleep(500);
+    bad = (await getState()).state;
+    if (bad.status === 'error' || bad.status === 'idle') break;
+  }
+  check(bad.status === 'error' && /工具列|內部頁面/.test(bad.message), `不能錄音的頁面按開始時提示：${bad.message}`);
+  const hostLeft = await evaluate(panel.sessionId, `chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] }).then((c) => c.length)`);
+  check(hostLeft === 0, '失敗後沒有留下錄音頁');
+
+  const segs = final.recordings.at(-1)?.segments ?? [];
+  const text = segs.map((s) => s.text).join(' ');
+  // 日文沒有空格，用字元數；英文用字數。一般朗讀英文每秒 2–3 字、日文每秒 5–8 字。
+  const count = opt.lang === 'ja' ? text.replace(/\s/g, '').length : text.split(/\s+/).filter(Boolean).length;
+  const minCount = duration * (opt.lang === 'ja' ? 3 : 1);
+  check(segs.length > 0, `轉出 ${segs.length} 句、${count} 個${opt.lang === 'ja' ? '字元' : '字'}`);
+  check(count >= minCount, `字數合理（至少 ${minCount}）`);
+  check(final.recordings.at(-1)?.language === opt.lang, `文字稿標記的語言是 ${opt.lang}`);
+  // 本機程式用來示範標點的提示句（host/transcriber_host.py STYLE_PROMPTS）不能被念進文字稿。
+  const leaked = segs.filter((s) => /today's lecture|いいお天気/i.test(s.text));
+  check(leaked.length === 0, `文字稿沒有混入提示句（${leaked.length} 句）`);
+  const punctuated = /[.,?!。、？！]/.test(text);
+  check(punctuated, '文字稿有標點');
+  const monotonic = segs.every((s, i) => i === 0 || s.start >= segs[i - 1].start);
+  check(monotonic, '時間依序遞增');
+  const lastEnd = segs.at(-1)?.end ?? 0;
+  check(lastEnd <= duration + 15, `最後一句結束在 ${lastEnd.toFixed(1)} 秒，沒有超出錄音長度`);
+  console.log('\n----- 文字稿 -----');
+  for (const s of segs) console.log(`[${s.start.toFixed(1).padStart(6)}] ${s.text}`);
+  console.log('------------------\n');
+
+  if (opt.shots) {
+    await evaluate(panel.sessionId, `window.scrollTo(0, 0)`);
+    for (const scheme of ['light', 'dark']) {
+      await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] }, panel.sessionId);
+      await sleep(300);
+      const { data } = await cdp('Page.captureScreenshot', { format: 'png' }, panel.sessionId);
+      fs.writeFileSync(path.join(opt.shots, `panel-done-${scheme}.png`), Buffer.from(data, 'base64'));
+    }
+    log('截圖存在', opt.shots);
+  }
+} catch (err) {
+  log('FAIL', err.message);
+  failed = true;
+} finally {
+  await cdp('Browser.close').catch(() => {});
+  ws.close();
+  server.close();
+  const left = await shutdownBrowser();
+  check(left.length === 0, `瀏覽器已完全關閉（殘留程序 ${left.length} 個）`);
+}
+log(failed ? '測試失敗' : '全部通過');
+process.exit(failed ? 1 : 0);
