@@ -102,7 +102,8 @@ body {
 .switch input:checked + .track::after { transform: translateX(14px); }
 .switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .switch .track, .switch .track::after { transition: none; } }
-.hint { color: var(--muted); font-size: 12px; }
+/* 提示放在開關下面自己一行，不把 A−／A+ 擠下去 */
+.hint { order: 1; flex-basis: 100%; color: var(--muted); font-size: 12px; }
 .hint:empty { display: none; }
 
 button,
@@ -126,6 +127,9 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button.primary.stop { background: var(--rec); border-color: var(--rec); color: #fff; }
 button.quiet { margin-left: auto; color: var(--muted); }
 button.quiet.armed { color: var(--rec); border-color: var(--rec); }
+/* 放大、收起、字體大小：小一點的次要按鈕 */
+button.tool { min-height: 28px; padding: 0 8px; color: var(--muted); font-size: 13px; }
+.text-size { display: inline-flex; gap: 4px; margin-left: auto; }
 
 .message {
   margin: 10px 0 0;
@@ -136,14 +140,15 @@ button.quiet.armed { color: var(--rec); border-color: var(--rec); }
   font-size: 13px;
 }
 
-.transcript { padding: 4px 14px 24px; }
+/* --text-size 由 A−／A+ 設定，裡面的字級都用 em 跟著縮放；視窗放大時一行不要拉得太長 */
+.transcript { max-width: 64em; padding: 4px 14px 24px; font-size: var(--text-size, 14px); }
 
 .rec-head {
   margin: 16px 0 6px;
   padding-bottom: 4px;
   border-bottom: 1px solid var(--line);
   color: var(--muted);
-  font-size: 12px;
+  font-size: 0.86em;
 }
 .rec-head strong { color: var(--text); font-weight: 600; }
 
@@ -152,14 +157,14 @@ button.quiet.armed { color: var(--rec); border-color: var(--rec); }
   flex: none;
   min-width: 3.6em;
   color: var(--time);
-  font: 12px/1.9 ui-monospace, "SF Mono", "DejaVu Sans Mono", monospace;
+  font: 0.86em/1.9 ui-monospace, "SF Mono", "DejaVu Sans Mono", monospace;
   font-variant-numeric: tabular-nums;
 }
 .line .body { min-width: 0; overflow-wrap: anywhere; }
 /* 譯文：接在原文下面，字小一點、顏色淡一點 */
-.line .tr { display: block; margin-top: 1px; color: var(--muted); font-size: 13px; }
+.line .tr { display: block; margin-top: 1px; color: var(--muted); font-size: 0.93em; }
 
-.working { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+.working { color: var(--muted); font-size: 0.93em; margin: 8px 0 0; }
 
 /* 即時字幕：還沒定稿，顏色淡一點、尾巴加游標，定稿後換成一般的行 */
 .line.live .src { color: var(--muted); }

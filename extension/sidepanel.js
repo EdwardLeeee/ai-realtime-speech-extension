@@ -1,21 +1,34 @@
 // 側邊欄：顯示錄音狀態和文字稿，提供開始／停止、雙語字幕開關、複製、下載、清除。
 // 狀態和文字稿都由背景程式寫進 storage，這裡只負責讀出來畫。
+// 按「放大」時，同一個頁面會再開在獨立視窗裡（網址帶 ?window=原本瀏覽器視窗的 id）。
 
 const $ = (id) => document.getElementById(id);
 const ACTIVE = ['starting', 'recording', 'stopping'];
 const LANGUAGE_NAMES = { en: '英文', ja: '日文', th: '泰文' };
+const TEXT_SIZES = [12, 14, 16, 18, 20, 24, 28, 32];
+const hostWindowId = Number(new URLSearchParams(location.search).get('window')) || null;
+const inWindow = hostWindowId !== null;
+// 側邊欄和獨立視窗各記各的字體大小，視窗預設大一點。
+const TEXT_SIZE_KEY = inWindow ? 'windowTextSize' : 'textSize';
+const DEFAULT_TEXT_SIZE = inWindow ? 18 : 14;
 
 let state = {};
 let recordings = [];
 let language = 'en';
 let bilingual = false; // 雙語字幕開關：開著才顯示（和複製、下載）譯文
+let textSize = DEFAULT_TEXT_SIZE;
 let caption = null; // 還沒講完那一句的即時字幕 { recId, id, offset, text }
 let captionTr = null; // 即時字幕的譯文 { recId, id, text }
 let clearArmed = null;
 
 async function load() {
   ({ state = {} } = await chrome.storage.session.get('state'));
-  ({ recordings = [], language = 'en', bilingual = false } = await chrome.storage.local.get(['recordings', 'language', 'bilingual']));
+  ({
+    recordings = [],
+    language = 'en',
+    bilingual = false,
+    [TEXT_SIZE_KEY]: textSize = DEFAULT_TEXT_SIZE,
+  } = await chrome.storage.local.get(['recordings', 'language', 'bilingual', TEXT_SIZE_KEY]));
   render();
 }
 
@@ -24,6 +37,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.recordings) recordings = changes.recordings.newValue ?? [];
   if (area === 'local' && changes.language) language = changes.language.newValue ?? 'en';
   if (area === 'local' && changes.bilingual) bilingual = Boolean(changes.bilingual.newValue);
+  if (area === 'local' && changes[TEXT_SIZE_KEY]) textSize = changes[TEXT_SIZE_KEY].newValue ?? DEFAULT_TEXT_SIZE;
   render();
 });
 
@@ -118,6 +132,9 @@ function render() {
   $('language').disabled = active;
   $('bilingual').checked = bilingual;
   $('bilingual-hint').textContent = translatorHint();
+  document.documentElement.style.setProperty('--text-size', `${textSize}px`);
+  $('smaller').disabled = textSize <= TEXT_SIZES[0];
+  $('bigger').disabled = textSize >= TEXT_SIZES.at(-1);
 
   const toggle = $('toggle');
   toggle.textContent = state.status === 'stopping' ? '收尾中…' : active ? '停止' : '開始';
@@ -221,10 +238,51 @@ $('toggle').addEventListener('click', async () => {
   if (ACTIVE.includes(state.status)) {
     chrome.runtime.sendMessage({ type: 'stop' });
   } else {
-    const win = await chrome.windows.getCurrent();
+    // 獨立視窗裡按開始：錄放大前那個瀏覽器視窗正在看的分頁；那個視窗關掉了，就用最近用過的瀏覽器視窗。
+    const host = inWindow && (await chrome.windows.get(hostWindowId).catch(() => null));
+    const win = inWindow ? host || (await chrome.windows.getLastFocused({ windowTypes: ['normal'] })) : await chrome.windows.getCurrent();
     chrome.runtime.sendMessage({ type: 'start', windowId: win.id });
   }
 });
+
+function stepTextSize(dir) {
+  const next = dir > 0 ? TEXT_SIZES.find((n) => n > textSize) : TEXT_SIZES.findLast((n) => n < textSize);
+  if (next) chrome.storage.local.set({ [TEXT_SIZE_KEY]: next });
+}
+$('smaller').addEventListener('click', () => stepTextSize(-1));
+$('bigger').addEventListener('click', () => stepTextSize(1));
+
+// 收起側邊欄只是關掉這個頁面，錄音在背景程式和錄音頁裡繼續。
+async function closePanel() {
+  const { id } = await chrome.windows.getCurrent();
+  if (chrome.sidePanel.close) await chrome.sidePanel.close({ windowId: id });
+  else window.close();
+}
+$('collapse').addEventListener('click', closePanel);
+
+$('popout').addEventListener('click', async () => {
+  const { id } = await chrome.windows.getCurrent();
+  const url = chrome.runtime.getURL(`sidepanel.html?window=${id}`);
+  // 這個瀏覽器視窗已經放大過，就把那個視窗叫到前面，不再開第二個。
+  const [open] = await chrome.runtime.getContexts({ contextTypes: ['TAB'], documentUrls: [url] });
+  if (open) await chrome.windows.update(open.windowId, { focused: true });
+  else await chrome.windows.create({ url, type: 'popup', width: 760, height: 900 });
+  await closePanel();
+});
+
+$('dock').addEventListener('click', () => {
+  // sidePanel.open 只能在點擊當下呼叫，前面不能先 await。
+  chrome.sidePanel.open({ windowId: hostWindowId }).then(
+    () => window.close(),
+    () => flash($('dock'), '原本的瀏覽器視窗已關閉'),
+  );
+});
+
+if (inWindow) {
+  $('popout').hidden = true;
+  $('collapse').hidden = true;
+  $('dock').hidden = false;
+}
 
 $('copy').addEventListener('click', async () => {
   try {

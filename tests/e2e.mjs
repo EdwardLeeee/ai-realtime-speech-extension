@@ -194,10 +194,12 @@ async function shutdownBrowser() {
 }
 
 // 本機程式和它啟動的翻譯模型（llama-server）：瀏覽器關掉後都要跟著結束。
+// 測試開始前就在跑的（使用者自己的瀏覽器正在錄音）不算。
+const preexisting = new Set();
 function hostProcesses() {
   const found = { host: [], llama: [] };
   for (const d of fs.readdirSync('/proc')) {
-    if (!/^\d+$/.test(d)) continue;
+    if (!/^\d+$/.test(d) || preexisting.has(Number(d))) continue;
     try {
       const args = fs.readFileSync(`/proc/${d}/cmdline`, 'utf8').split('\0');
       if (args.some((a) => a.endsWith('/host/transcriber_host.py'))) found.host.push(Number(d));
@@ -206,6 +208,7 @@ function hostProcesses() {
   }
   return found;
 }
+for (const pid of Object.values(hostProcesses()).flat()) preexisting.add(pid);
 async function waitFor(fn, ms) {
   for (let t = 0; t < ms; t += 250) {
     if (fn()) return true;
@@ -268,16 +271,87 @@ try {
         .then(([s, l]) => ({ state: s.state ?? {}, recordings: l.recordings ?? [] }))`,
     );
 
+  // 側邊欄上面的按鈕，在點圖示時真的打開的那個側邊欄上按（上面那個側邊欄分頁只是方便讀狀態）：
+  // A+、放大成獨立視窗、回到側邊欄、收起後錄音繼續、再點圖示側邊欄回來而且不會重新開始。
+  async function checkPanelButtons(recId) {
+    const targets = async () =>
+      (await cdp('Target.getTargets')).targetInfos.filter(
+        (t) => t.url.startsWith(`chrome-extension://${id}/sidepanel.html`) && t.targetId !== panel.targetId,
+      );
+    const sidePanel = async () => (await targets()).find((t) => !t.url.includes('?'));
+    const popup = async () => (await targets()).find((t) => t.url.includes('?window='));
+    const until = async (fn, ms = 5000) => {
+      for (let t = 0; t < ms; t += 200) {
+        const v = await fn();
+        if (v) return v;
+        await sleep(200);
+      }
+      return fn();
+    };
+    const attach = async (targetId) => {
+      const { sessionId } = await cdp('Target.attachToTarget', { targetId, flatten: true });
+      await cdp('Runtime.enable', {}, sessionId);
+      return sessionId;
+    };
+    const fontSize = (sid) => evaluate(sid, `getComputedStyle(document.getElementById('transcript')).fontSize`);
+    const click = (sid, button) => evaluate(sid, `document.getElementById('${button}').click()`);
+
+    let sp = await attach((await sidePanel()).targetId);
+    const before = await fontSize(sp);
+    await click(sp, 'bigger');
+    await sleep(300);
+    const after = await fontSize(sp);
+    check(parseFloat(after) > parseFloat(before), `按 A+ 字變大（${before} → ${after}）`);
+
+    await click(sp, 'popout');
+    const win = await until(popup);
+    const panelClosed = await until(async () => !(await sidePanel()));
+    check(Boolean(win) && panelClosed, '按「放大」開出獨立視窗，側邊欄收起');
+    const ws = await attach(win.targetId);
+    const winText = await until(
+      () => evaluate(ws, `document.querySelector('.line.live .src')?.textContent || document.querySelector('.line')?.textContent || ''`),
+      10000,
+    );
+    check(Boolean(winText), `獨立視窗裡有字幕（${winText.slice(0, 40)}）`);
+    if (opt.shots) {
+      fs.mkdirSync(opt.shots, { recursive: true });
+      for (const scheme of ['light', 'dark']) {
+        await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] }, ws);
+        await sleep(300);
+        const { data } = await cdp('Page.captureScreenshot', { format: 'png' }, ws);
+        fs.writeFileSync(path.join(opt.shots, `window-recording-${scheme}.png`), Buffer.from(data, 'base64'));
+      }
+    }
+
+    await click(ws, 'dock');
+    const docked = await until(async () => !(await popup()) && (await sidePanel()));
+    check(Boolean(docked), '按「回到側邊欄」視窗關掉、側邊欄回來');
+    sp = await attach(docked.targetId);
+    await sleep(300);
+    check((await fontSize(sp)) === after, '側邊欄記得自己的字體大小');
+    await click(sp, 'smaller');
+
+    await click(sp, 'collapse');
+    check(await until(async () => !(await targets()).length), '按「收起」側邊欄關掉');
+    await sleep(1000);
+    check((await getState()).state.status === 'recording', '收起後還在錄音');
+    await cdp('Target.activateTarget', { targetId: page.targetId });
+    await cdp('Extensions.triggerAction', { id, targetId: tabTarget.targetId });
+    check(Boolean(await until(sidePanel)) && (await getState()).state.recId === recId, '再點圖示側邊欄回來，還是同一次錄音');
+  }
+
   let last = '';
   let meterMax = 0;
   let warning = '';
   let llamaSeen = false; // 錄音中看到過翻譯模型的程序
   let device = '';
+  let translatorDevice = '';
   let toggledOn = false;
   let toggledOff = false;
   const recStart = Date.now();
   const deadline = recStart + (duration + 5) * 1000;
   let shotTaken = false;
+  let buttonsChecked = false;
   const clickBilingual = () => evaluate(panel.sessionId, `document.getElementById('bilingual').click()`);
   while (Date.now() < deadline) {
     await sleep(3000);
@@ -292,6 +366,7 @@ try {
     if (state.status === 'error') throw new Error(state.message);
     if (state.message) warning = state.message;
     if (state.device) device = state.device;
+    if (state.translatorDevice) translatorDevice = state.translatorDevice;
     const meter = await evaluate(panel.sessionId, `parseFloat(document.getElementById('meter-fill').style.width) || 0`);
     meterMax = Math.max(meterMax, meter);
     if (hostProcesses().llama.length) llamaSeen = true;
@@ -307,6 +382,10 @@ try {
         const { data } = await cdp('Page.captureScreenshot', { format: 'png' }, panel.sessionId);
         fs.writeFileSync(path.join(opt.shots, `panel-recording-${scheme}.png`), Buffer.from(data, 'base64'));
       }
+    }
+    if (!buttonsChecked && elapsed >= duration * 0.45) {
+      buttonsChecked = true;
+      await checkPanelButtons(state.recId);
     }
     if (opt.bilingual === 'toggle' && !toggledOn && elapsed >= duration / 3) {
       log('在側邊欄打開雙語字幕');
@@ -341,8 +420,10 @@ try {
   if (opt.bilingual !== 'off') {
     log(`即時字幕的譯文：更新 ${live.trCaptions.length} 次，最後一次「${live.trCaptions.at(-1)?.text ?? ''}」`);
     // 只有 CPU 時即時字幕不翻（一句要 3 秒，跟不上每秒一次），只翻定稿。
-    if (device === 'cuda') check(live.trCaptions.length >= 3, `即時字幕也有譯文（${live.trCaptions.length} 次更新）`);
-    else check(live.trCaptions.length === 0, `CPU 模式不翻即時字幕（${live.trCaptions.length} 次）`);
+    if (device !== 'cuda') check(live.trCaptions.length === 0, `CPU 模式不翻即時字幕（${live.trCaptions.length} 次）`);
+    else if (translatorDevice === 'gpu') check(live.trCaptions.length >= 3, `即時字幕也有譯文（${live.trCaptions.length} 次更新）`);
+    // 顯示卡被別的程式佔住時（例如使用者自己的瀏覽器也在錄音），翻譯模型會改用 CPU，即時字幕就不翻。
+    else log(`翻譯模型改用 ${translatorDevice || '?'}，不檢查即時字幕的譯文`);
   }
   log('按側邊欄的「停止」');
   await evaluate(panel.sessionId, `document.getElementById('toggle').click()`);

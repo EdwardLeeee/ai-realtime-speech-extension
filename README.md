@@ -38,6 +38,12 @@ Brave／Chrome 插件。把分頁正在播放的英文、日文或泰文錄音�
 4. 聽完按側邊欄的「停止」。
 5. 「複製」會把文字稿複製到剪貼簿，「下載 .txt」會存成文字檔。「清除」要連按兩次，避免誤刪。
 
+側邊欄上還有這些按鈕：
+
+- **收起**（右上角）：把側邊欄收起來，錄音不會停。錄音中再點工具列圖示就會打開；沒在錄音時點圖示則會開始錄音。
+- **放大**（右上角）：把文字稿和即時字幕開成獨立視窗，可以拖成任意大小、最大化，或放到另一個螢幕，側邊欄同時收起。視窗裡的按鈕跟側邊欄一樣；按「回到側邊欄」就換回來。
+- **A−／A+**：調文字稿和字幕的字體大小。側邊欄和獨立視窗各自記住（視窗預設比較大）。
+
 注意：
 
 - 每句前面的時間是**從開始錄音算起**，不是影片或錄音本身的播放時間。想讓兩者對齊，就先點圖示再按播放。
@@ -113,7 +119,7 @@ extension/   插件（Manifest V3）
   background.js   錄音流程：tabCapture → 背景錄音頁 → 本機程式 → 寫進 storage
   offscreen.js    錄分頁聲音、播回喇叭、降到 16 kHz、在停頓處切段
   pcm-worklet.js  AudioWorklet，每 100 ms 交出一塊聲音
-  sidepanel.*     側邊欄
+  sidepanel.*     側邊欄（「放大」開的獨立視窗也是同一頁，網址多帶 ?window=）
 host/        本機轉文字程式（native messaging host，Python + faster-whisper，用 uv 管）
   vendor/llama.cpp/  install.sh 下載的 llama.cpp（Vulkan 版），雙語字幕用它的 llama-server 跑翻譯模型，不進 git
 tests/e2e.mjs  端到端測試：headless Brave 載入插件、播錄音、模擬點圖示、檢查文字稿與雙語字幕

@@ -12,6 +12,9 @@
       <span id="dot" class="dot" aria-hidden="true"></span>
       <span id="status" class="status">尚未開始</span>
       <span id="elapsed" class="elapsed"></span>
+      <button id="popout" class="tool" type="button" title="開成獨立視窗，可以拖成任意大小或最大化">放大</button>
+      <button id="collapse" class="tool" type="button" title="收起側邊欄，錄音不會停。錄音中點工具列的圖示就會再打開">收起</button>
+      <button id="dock" class="tool" type="button" title="關掉這個視窗，改回在瀏覽器的側邊欄顯示" hidden>回到側邊欄</button>
     </div>
     <div id="source" class="source"></div>
     <div class="meter" aria-hidden="true"><div id="meter-fill" class="meter-fill"></div></div>
@@ -27,6 +30,10 @@
         雙語字幕
       </label>
       <span id="bilingual-hint" class="hint"></span>
+      <span class="text-size" role="group" aria-label="文字稿的字體大小">
+        <button id="smaller" class="tool" type="button" aria-label="字小一點" title="字小一點">A−</button>
+        <button id="bigger" class="tool" type="button" aria-label="字大一點" title="字大一點">A+</button>
+      </span>
     </div>
     <div class="actions">
       <button id="toggle" class="primary" type="button">開始</button>
