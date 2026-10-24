@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Tab Transcriber：錄音轉文字稿",
   "short_name": "Tab Transcriber",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "把分頁正在播放的英文、日文或泰文錄音轉成每句附時間的文字稿，可加上繁體中文雙語字幕。在這台電腦上轉文字和翻譯，聲音不會上傳。",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqn92d3zumabYprrdAoD5fPszfJGSIZVmWWKUtl5OBglxiUhHt9sRQj/gYwSDar2nHmd1/3SpqFi6mt5fwBXTEn/bjzEQGP92qjlnBOhw3CVeBf2oGBcj/k1xyKlaNf+DMVQSf0PEi5SDgH6FKYjJkDzuwwbuqF6R+XYpvR1cl6YQQhjrTgGM4AwoQ+XKifDQ4AMcJiu80P2GtgbablMt5qNZpp8PCIEclylZxtq7pie8iMvgdezwz97e2S3TcfSgY6TC/2xJ20QxNqYTNy0QBnix1jBx7RSriRoVKsbQXrbNedf/eI22Kd7Fpr9b57fXqt5RTHWH6yKW4s1sEGWbxwIDAQAB",
   "minimum_chrome_version": "116",

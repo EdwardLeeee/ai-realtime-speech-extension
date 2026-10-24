@@ -333,6 +333,7 @@ try {
           if (!host) return null;
           const r = host.shadowRoot.querySelector('.box').getBoundingClientRect();
           const c = host.shadowRoot.querySelector('.close').getBoundingClientRect();
+          const g = host.shadowRoot.querySelector('.resize').getBoundingClientRect();
           return {
             open: host.matches(':popover-open'),
             parent: host.parentNode.id || host.parentNode.tagName,
@@ -341,11 +342,14 @@ try {
             tr: host.shadowRoot.querySelector('.tr')?.textContent ?? '',
             cx: r.left + r.width / 2, cy: r.top + r.height / 2, bottom: r.bottom,
             close: [c.left + c.width / 2, c.top + c.height / 2],
+            grip: [g.left + g.width / 2, g.top + g.height / 2],
+            left: r.left, top: r.top, w: r.width, h: r.height,
+            sized: host.shadowRoot.querySelector('.box').classList.contains('sized'),
           };
         })()`,
       );
-    const mouse = (type, x, y) =>
-      cdp('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount: 1 }, ps);
+    const mouse = (type, x, y, clickCount = 1) =>
+      cdp('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount }, ps);
 
     const shown = await until(async () => {
       const i = await info();
@@ -371,6 +375,30 @@ try {
       Math.abs(dx + 150) < 3 && Math.abs(dy + 125) < 3 && Boolean(saved) && clicks === 0,
       `拖得動、位置有存、點擊沒有傳到網頁（移動 ${dx.toFixed(0)}, ${dy.toFixed(0)}；網頁收到 ${clicks} 次點擊）`,
     );
+
+    // 拖右下角改大小：寬高跟著滑鼠變、左上角不動；按兩下恢復自動大小
+    const small = await info();
+    await mouse('mousePressed', ...small.grip);
+    for (let i = 1; i <= 5; i++) await mouse('mouseMoved', small.grip[0] + 40 * i, small.grip[1] + 16 * i);
+    await mouse('mouseReleased', small.grip[0] + 200, small.grip[1] + 80);
+    await sleep(300);
+    const big = await info();
+    const size = (await evaluate(panel.sessionId, `chrome.storage.local.get('overlaySize')`)).overlaySize;
+    check(
+      big.sized && Math.abs(big.w - small.w - 200) < 3 && Math.abs(big.h - small.h - 80) < 3 &&
+        Math.abs(big.left - small.left) < 3 && Math.abs(big.top - small.top) < 3 && Boolean(size),
+      `拖右下角可以改寬高，大小有存（寬 ${small.w.toFixed(0)}→${big.w.toFixed(0)}，高 ${small.h.toFixed(0)}→${big.h.toFixed(0)}）`,
+    );
+    await screenshot(ps, 'page-overlay-resized.png');
+    await mouse('mousePressed', ...big.grip);
+    await mouse('mouseReleased', ...big.grip);
+    await mouse('mousePressed', ...big.grip, 2);
+    await mouse('mouseReleased', ...big.grip, 2);
+    await sleep(300);
+    const reset = await info();
+    const cleared = !(await evaluate(panel.sessionId, `chrome.storage.local.get('overlaySize')`)).overlaySize;
+    check(!reset.sized && reset.h < big.h - 40 && cleared && (await evaluate(ps, `window.__clicks`)) === 0,
+      `右下角按兩下恢復自動大小（高 ${reset.h.toFixed(0)}）`);
 
     await evaluate(ps, `document.getElementById('player').requestFullscreen()`);
     const full = await until(async () => {

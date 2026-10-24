@@ -31,6 +31,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 import urllib.request
 from collections import deque
 from pathlib import Path
@@ -63,9 +64,24 @@ PROMPT_CHARS = 200  # 把上一段結尾當提示，讓跨段的句子接得上
 TOKENS_PER_SPEECH_S = 25
 TOKENS_BASE = 20
 CAP_LIMIT = 200
+FINAL_TEMPERATURES = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)  # faster-whisper 的預設
 # 即時字幕少試幾個溫度：預設六個，每個都要再解碼五個候選，卡住時會拖慢每秒一次的更新；完全不重試的話泰文會卡在重複
 PARTIAL_TEMPERATURES = (0.0, 0.4, 0.8)
 PROMPT_RESET_TEMPERATURE = 0.5  # 要重試到這個溫度以上才轉得出來的結果不可靠，不拿來當下一段的提示（同 faster-whisper 段內的規則）
+# faster-whisper 判定「這次解碼失敗、換下一個溫度」的門檻（它的預設值）
+COMPRESSION_RATIO_LIMIT = 2.4
+LOG_PROB_LIMIT = -1.0
+# 連續的狀聲詞、附和（「うん。 うん。 …」「ううう…」「ha ha ha」）Whisper 會照實寫成一長串重複，壓縮比因此超過 2.4，
+# 被當成卡住而換溫度重試；但聲音本來就在重複，每個溫度都一樣，一段要轉 10–16 秒（docs/research/2026-10-tab-transcription.md 第 11 節）。
+# 所以先只用溫度 0 轉一次：沒失敗就照用；失敗了但大部分是很短的單位（只算字母，不超過 4 個字）連續重複 8 次以上，就當成狀聲詞直接用；
+# 其他失敗才照原本的溫度重轉，配樂的幻覺句、泰文卡在重複都靠這個。
+VOCAL_UNIT = 4
+VOCAL_REPS = 8
+VOCAL_SHARE = 0.5
+# 同一個單位（最長 20 個字）連續出現 4 次以上就只留 3 次，後面接「…」，字幕和文字稿才不會被一長串重複塞滿
+REPEAT_UNIT = 20
+REPEAT_MIN = 4
+REPEAT_KEEP = 3
 # 放在提示最前面，示範要有標點與大小寫：large-v3-turbo 從句子中間開始聽時，不給這段會輸出全小寫、沒有標點
 # （docs/research/2026-10-tab-transcription.md）。
 # 泰文幾乎不用標點，加示範句也沒有變準（FLEURS 字元錯誤率 12.3% → 12.9%），所以不加。
@@ -76,7 +92,7 @@ STYLE_PROMPTS = {
 # Hy-MT2 模型卡的翻譯提示（中文提示配中文語言名）
 TRANSLATE_PROMPT = "将以下文本翻译为繁体中文，注意只需要输出翻译后的结果，不要额外解释：\n\n{text}"
 # 半句話翻出來常常不通順，所以定稿先湊到句尾標點再翻。泰文句子之間只空格、不用句號，Whisper 的每一段就當一句。
-SENTENCE_END = {"en": re.compile(r"[.?!][\"')\]]*$"), "ja": re.compile(r"[。？！?!」』）]$")}
+SENTENCE_END = {"en": re.compile(r"[.?!…][\"')\]]*$"), "ja": re.compile(r"[。？！?!」』）…]$")}
 JOINERS = {"ja": ""}
 MAX_UNIT_SEGMENTS = 3  # 最多湊三段就翻，免得一直等不到句號
 HOLD_S = 6.0  # 等不到下一段定稿就先翻手上的半句
@@ -141,7 +157,7 @@ def load_model(config, language):
 
 
 def transcribe(model, config, language, msg, prompt, partial=False):
-    """回傳 (段落, 講話秒數, 最高重試溫度)。"""
+    """回傳 (段落, 講話秒數, 最高重試溫度, 是否當成狀聲詞沒有重試)。"""
     import numpy as np
     from faster_whisper.vad import get_speech_timestamps
 
@@ -150,27 +166,92 @@ def transcribe(model, config, language, msg, prompt, partial=False):
     # 先量出有多少講話（和 transcribe 裡的 VAD 同一套設定）：沒有就不用轉，有的話依長度定產生上限。
     speech_s = sum(s["end"] - s["start"] for s in get_speech_timestamps(pcm)) / SAMPLE_RATE
     if not speech_s:
-        return [], 0.0, 0.0
+        return [], 0.0, 0.0, False
     cap = TOKENS_BASE + TOKENS_PER_SPEECH_S * speech_s
-    segments, _info = model.transcribe(
-        pcm,
+    options = dict(
         language=language,
         beam_size=config["partial_beam_size"] if partial else config["beam_size"],
-        **({"temperature": PARTIAL_TEMPERATURES} if partial else {}),
         max_new_tokens=int(cap) if cap < CAP_LIMIT else None,
         vad_filter=True,
         initial_prompt=f"{STYLE_PROMPTS.get(language, '')} {prompt}".strip() or None,
     )
-    out = []
-    temperature = 0.0
+    temperatures = PARTIAL_TEMPERATURES if partial else FINAL_TEMPERATURES
+    segments = list(model.transcribe(pcm, temperature=temperatures[0], **options)[0])
+    # 什麼都沒轉出來時看不到這次解碼算不算失敗（例如很早就結束、平均機率太低，原本會換溫度重試），所以也重轉
+    failed = not segments or any(
+        s.compression_ratio > COMPRESSION_RATIO_LIMIT or s.avg_logprob < LOG_PROB_LIMIT for s in segments
+    )
+    vocal = failed and bool(segments) and is_vocalization(" ".join(s.text for s in segments))
+    if failed and not vocal:
+        # 照原本的溫度從頭轉：一段錄音可能分成幾次解碼，沒失敗的那幾次這樣才會和以前一樣停在溫度 0
+        segments = list(model.transcribe(pcm, temperature=temperatures, **options)[0])
+    temperature = max((s.temperature for s in segments), default=0.0)
+    # 一模一樣的句子接連出現（例如六個「うん。」）併成一行
+    parts = []
     for seg in segments:
-        temperature = max(temperature, seg.temperature)
         text = seg.text.strip()
-        if text:
-            out.append(
-                {"start": round(offset + seg.start, 2), "end": round(offset + seg.end, 2), "text": text}
-            )
-    return out, speech_s, temperature
+        if parts and text == parts[-1][2][-1]:
+            parts[-1][1] = seg.end
+            parts[-1][2].append(text)
+        elif text:
+            parts.append([seg.start, seg.end, [text]])
+    out = [
+        {"start": round(offset + start, 2), "end": round(offset + end, 2), "text": collapse_repeats(" ".join(texts))}
+        for start, end, texts in parts
+    ]
+    return out, speech_s, temperature, vocal
+
+
+def find_repeats(text, max_unit, min_reps, keep=lambda unit: True, tail=False):
+    """找出 text 裡連續重複的片段，回傳 [(開始, 結束, 單位長度)]；不分大小寫，每個位置取最短的單位。
+
+    tail：最後一次常少了結尾（「うん。 」最後一個沒有空白、「ーオ」最後只剩「ー」），後面接著的不是字母或數字的話一起算進去。
+    """
+    text = "".join(c.lower() if len(c.lower()) == 1 else c for c in text)  # 「No, no, no」從第一個就對齊
+    runs, i, n = [], 0, len(text)
+    while i < n:
+        for size in range(1, min(max_unit, (n - i) // min_reps) + 1):
+            unit = text[i:i + size]
+            j = i + size
+            while text.startswith(unit, j):
+                j += size
+            if (j - i) // size < min_reps or not keep(unit):
+                continue
+            if tail:
+                j += next((k for k in range(size - 1, 0, -1)
+                           if text.startswith(unit[:k], j) and not is_letter(text[j + k:j + k + 1])), 0)
+            runs.append((i, j, size))
+            i = j
+            break
+        else:
+            i += 1
+    return runs
+
+
+def is_letter(ch):
+    # 泰文的母音、聲調符號是組合字元（M 類），也要算字母，才不會把一個字拆開
+    return bool(ch) and unicodedata.category(ch)[0] in "LMN"
+
+
+def collapse_repeats(text):
+    """同一個單位連續重複太多次時縮短，例如「うん。 」七十次 → 「うん。 うん。 うん。…」。只有數字或標點的不縮，以免 1000000 變短。"""
+    out, pos = [], 0
+    for start, end, size in find_repeats(text, REPEAT_UNIT, REPEAT_MIN, lambda u: any(c.isalpha() for c in u), tail=True):
+        out.append(text[pos:start])
+        out.append(text[start:start + size * REPEAT_KEEP].rstrip() + "…")
+        # 單位結尾的空白跟著被收掉了，後面還有字就補回一個（最後一次只剩半個時，後面本來就是標點或空白）
+        if (end - start) % size == 0 and text[end - 1].isspace() and end < len(text) and not text[end].isspace():
+            out.append(" ")
+        pos = end
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def is_vocalization(text):
+    """大部分是很短的聲音一直重複（狀聲詞、附和、笑聲），而不是卡在重複同一句話。只看字母，不管標點和空白怎麼夾。"""
+    letters = "".join(c for c in text if c.isalpha())
+    covered = sum(end - start for start, end, _ in find_repeats(letters, VOCAL_UNIT, VOCAL_REPS))
+    return bool(letters) and covered >= VOCAL_SHARE * len(letters)
 
 
 class Translator:
@@ -479,8 +560,8 @@ def run(model, config, language, translator, first):
             continue
         if kind == "partial":
             try:
-                segments, _, _ = transcribe(model, config, language, msg, prompt, partial=True)
-                text = " ".join(s["text"] for s in segments)
+                segments, _, _, _ = transcribe(model, config, language, msg, prompt, partial=True)
+                text = collapse_repeats(" ".join(s["text"] for s in segments))
             except Exception:
                 log.exception("partial failed id=%s", msg.get("id"))
                 text = ""
@@ -491,21 +572,21 @@ def run(model, config, language, translator, first):
             continue
         started = time.perf_counter()
         try:
-            segments, speech_s, temperature = transcribe(model, config, language, msg, prompt)
+            segments, speech_s, temperature, vocal = transcribe(model, config, language, msg, prompt)
         except Exception as exc:
             log.exception("transcribe failed id=%s", msg.get("id"))
             send({"type": "error", "id": msg.get("id"), "message": f"轉文字失敗：{exc}"})
             continue
         elapsed = time.perf_counter() - started
         audio_s = len(msg["pcm"]) * 3 / 4 / 2 / SAMPLE_RATE
-        log.info("chunk id=%s audio=%.1fs speech=%.1fs elapsed=%.2fs segments=%d temperature=%.1f",
-                 msg.get("id"), audio_s, speech_s, elapsed, len(segments), temperature)
+        log.info("chunk id=%s audio=%.1fs speech=%.1fs elapsed=%.2fs segments=%d temperature=%.1f%s",
+                 msg.get("id"), audio_s, speech_s, elapsed, len(segments), temperature, " vocal" if vocal else "")
         send({"type": "segments", "id": msg.get("id"), "segments": segments,
               "elapsed": round(elapsed, 2)})
         translator.add_segments(segments)
         text = " ".join(s["text"] for s in segments)
-        # 重試到高溫才有的結果常是幻覺；拿來當提示的話，下一段會跟著重複同一句
-        if text and temperature <= PROMPT_RESET_TEMPERATURE:
+        # 重試到高溫才有的結果常是幻覺；拿來當提示的話，下一段會跟著重複同一句。狀聲詞也一樣，會讓下一段跟著「うん。」
+        if text and temperature <= PROMPT_RESET_TEMPERATURE and not vocal:
             prompt = (prompt + " " + text)[-PROMPT_CHARS:]
 
 

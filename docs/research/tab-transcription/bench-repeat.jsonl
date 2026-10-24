@@ -1,0 +1,22 @@
+{"case": "vocal-ja@12.0", "speech": 14.0, "partial": false, "ver": "old", "elapsed": 1.85, "segments": 1, "chars": 15, "vocal": null, "text": "ご視聴ありがとうございました。"}
+{"case": "vocal-ja@12.0", "speech": 14.0, "partial": false, "ver": "new", "elapsed": 1.1, "segments": 1, "chars": 13, "vocal": true, "text": "ボーラ、ボーラ、ボーラ、…"}
+{"case": "vocal-ja@12.0", "speech": 14.0, "partial": true, "ver": "old", "elapsed": 1.63, "segments": 1, "chars": 15, "vocal": null, "text": "ご視聴ありがとうございました。"}
+{"case": "vocal-ja@12.0", "speech": 14.0, "partial": true, "ver": "new", "elapsed": 0.79, "segments": 1, "chars": 7, "vocal": true, "text": "ボラボラボラ…"}
+{"case": "vocal-ja@0.73", "speech": 14.0, "partial": false, "ver": "old", "elapsed": 0.41, "segments": 1, "chars": 15, "vocal": null, "text": "ゴン、ゴン、ゴン、ゴン、ゴン。"}
+{"case": "vocal-ja@0.73", "speech": 14.0, "partial": false, "ver": "new", "elapsed": 0.43, "segments": 1, "chars": 11, "vocal": false, "text": "ゴン、ゴン、ゴン、…。"}
+{"case": "vocal-ja@0.73", "speech": 14.0, "partial": true, "ver": "old", "elapsed": 1.99, "segments": 1, "chars": 223, "vocal": null, "text": "公共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共共"}
+{"case": "vocal-ja@0.73", "speech": 14.0, "partial": true, "ver": "new", "elapsed": 0.81, "segments": 1, "chars": 7, "vocal": true, "text": "ゴンゴンゴン…"}
+{"case": "vocal-en@0.2", "speech": 14.0, "partial": false, "ver": "old", "elapsed": 3.12, "segments": 1, "chars": 670, "vocal": null, "text": "Chat, chat, chat, chat, chat, chat, chat, chat, chat, chat, chat, chat, chat, ch"}
+{"case": "vocal-en@0.2", "speech": 14.0, "partial": false, "ver": "new", "elapsed": 0.44, "segments": 1, "chars": 18, "vocal": true, "text": "Chat, chat, chat,…"}
+{"case": "vocal-en@0.2", "speech": 14.0, "partial": true, "ver": "old", "elapsed": 2.05, "segments": 1, "chars": 670, "vocal": null, "text": "Chat, chat, chat, chat, chat, chat, chat, chat, chat, chat, chat, chat, chat, ch"}
+{"case": "vocal-en@0.2", "speech": 14.0, "partial": true, "ver": "new", "elapsed": 0.79, "segments": 1, "chars": 18, "vocal": true, "text": "Chat, chat, chat,…"}
+{"case": "stuck-music", "speech": 1.9, "partial": false, "ver": "old", "elapsed": 2.31, "segments": 3, "chars": 43, "vocal": null, "text": "ボランティアについてなど、 ご視聴ありがとうございました ご視聴ありがとうございました"}
+{"case": "stuck-music", "speech": 1.9, "partial": false, "ver": "new", "elapsed": 2.75, "segments": 1, "chars": 61, "vocal": false, "text": "ボランティアについてなどに私たちの村の近くに、 中山の近くに、中山の近くに、中山の近くに、… 中山の近くに、中山の近くに、"}
+{"case": "stuck-music", "speech": 1.9, "partial": true, "ver": "old", "elapsed": 1.08, "segments": 4, "chars": 55, "vocal": null, "text": "ボランティアについてなど、 ボランティアについてなど、 ボランティアについてなど、 ボランティアについてなど、"}
+{"case": "stuck-music", "speech": 1.9, "partial": true, "ver": "new", "elapsed": 1.85, "segments": 2, "chars": 85, "vocal": false, "text": "ボランティアについてなど、 ボランティアについてなど、 ボランティアについてなど、 ボランティアについてなど、 ご視聴ありがとうございました ご視聴ありがとうご"}
+{"case": "stuck-speech", "speech": 13.1, "partial": false, "ver": "old", "elapsed": 4.89, "segments": 4, "chars": 129, "vocal": null, "text": "その中山からすこし、はなれた山のなかに、ゴン狐という狐がいました。ゴンはひとりぼっちの子狐で、 biodiversityの一杯しげった森のなかにelle マジャ"}
+{"case": "stuck-speech", "speech": 13.1, "partial": false, "ver": "new", "elapsed": 5.88, "segments": 7, "chars": 106, "vocal": false, "text": "そのなかやまから少しはなれたやまの中にゴン神牛という狐がいました。 ゴンはひとりぼっちの子鬼つねでシダのいっぱいしげった森の中に あなたはギメダの混ぜたり、 ノ"}
+{"case": "stuck-speech", "speech": 13.1, "partial": true, "ver": "old", "elapsed": 2.39, "segments": 9, "chars": 143, "vocal": null, "text": "その中山から、少し離れた山の中に、ゴンギツネという狐がいました。ゴンは、ひとりぼっちの子ギツネで、滋賀のいっぱい茂った森の中に、 あなに、 お天気です。 お天気"}
+{"case": "stuck-speech", "speech": 13.1, "partial": true, "ver": "new", "elapsed": 3.1, "segments": 3, "chars": 91, "vocal": false, "text": "その中山から少し離れた山の中に、ゴン狐という狐がいました。ゴンはひとりぼっちの子狐で、滋賀のいっぱい茂った森の中に、 あなたの子が、 あなたの子が、 あなたの子"}
+{"case": "diff", "lang": "th", "partial": false, "temperature": {"old": 0.4, "new": 0.4}, "old": ["การผ่านตัวแถนการท้องเที่ยวไม่ควรติดต่อไปที่โรงแรมโดยตรง พุทธษณาในที่เบตรมีรากฐานมาจากคำสอนของพพุทธเจ้าแต่ได้มีการเพิ่มแนวทางของมหายาและเทคนิคจำนวนมากของมัน"], "new": ["การผ่านตัวแถนการท่องเที่ยว ไม่ควรติดต่อไปที่โรงแรมโดยตรง พุทธศาสนาในที่เบต มีรากฐานมาจากคำสอนของพุทธเจ้า แต่ได้มีการเพิ่มแนวทางของมหายาและเทคนิคจำนวนมากของพุทธศาสนาท"]}
+{"case": "summary", "chunks": 76, "different": 1, "median": {"old": 0.436, "new": 0.451}, "p95": {"old": 0.705, "new": 0.72}}

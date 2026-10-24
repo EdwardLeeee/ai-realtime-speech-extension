@@ -5,7 +5,7 @@
 //   chrome.storage.local.recordings  文字稿 [{ id, title, url, language, startedAt, segments: [{ start, end, text, translation? }] }]
 //   chrome.storage.local.language    側邊欄選的語言（en | ja | th），下次開始錄音時生效
 //   chrome.storage.local.bilingual   雙語字幕開關；錄音中切換會馬上通知本機程式啟動或關掉翻譯模型
-//   chrome.storage.local.overlay     網頁字幕開關（預設開）；overlayPos 是網頁字幕的位置，由 caption-overlay.js 存
+//   chrome.storage.local.overlay     網頁字幕開關（預設開）；overlayPos、overlaySize 是網頁字幕的位置和使用者拖出來的大小，由 caption-overlay.js 存
 // 即時字幕（還沒講完的那一句）每秒更新，不寫 storage，直接用 runtime 訊息 { type: 'caption' } 推給側邊欄，
 // 它的譯文用 { type: 'caption-translation' }。
 // 網頁字幕（caption-overlay.js）注入在被錄的分頁裡，用 tabs.sendMessage 推上一句定稿和正在講的這一句。

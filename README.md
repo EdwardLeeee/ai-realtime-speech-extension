@@ -52,11 +52,14 @@ Brave／Chrome 插件。把分頁正在播放的英文、日文或泰文錄音�
 - 一句話中間停頓超過 0.4 秒，偶爾會被切成兩行（例如 `look through to` / `the garden with one eye.`），文字本身不受影響。
 - 文字稿存在瀏覽器裡，關掉側邊欄或重開瀏覽器都還在，按「清除」才會刪掉。
 - 配樂或歌聲多、講話少的影片，偶爾會冒出沒人講的句子，日文常見的是「ご視聴ありがとうございました」。這是 Whisper 本身的毛病。程式已經限制這種句子的長度：講話只有一兩秒的段落，以前會卡住約 10 秒，現在約 2 秒；講話較多的段落仍可能卡住 4–5 秒。句子本身還是可能出現。
+- 連續的狀聲詞、附和或笑聲（例如一直「うん、うん」「ううう」），Whisper 會照實寫成一長串。程式會把連續重複 4 次以上的部分縮成 3 次加「…」（例如「うん。 うん。 うん。…」），也不再為了這種重複換六個溫度重轉（以前一段會卡 8–16 秒，字幕跟著停住）。
 
 ## 網頁字幕
 
 - 側邊欄的「網頁字幕」開關開著時（預設開），錄音中播放的網頁上會浮著一個字幕框：上面淡一點的是上一句，下面是正在講的這一句；雙語字幕開著時，各句下面加上中文。
-- 按住字幕框可以拖到任何位置，位置會記住。字幕框右上角的 × 會把它關掉，同時關掉側邊欄的「網頁字幕」開關，之後的錄音也不再顯示；要再看就把開關打開，錄音中也可以隨時開關。
+- 按住字幕框可以拖到任何位置，位置會記住。
+- 拖字幕框右下角的斜線可以改寬度和高度，字的大小不變：拉寬一行放更多字，拉高可以多顯示幾行（字貼著下緣）。大小會記住，全螢幕時框跟著字一起等比例變大；在右下角按兩下恢復依文字自動調整。沒調過時，一句太長只顯示最新的約五行。
+- 字幕框右上角的 × 會把它關掉，同時關掉側邊欄的「網頁字幕」開關，之後的錄音也不再顯示；要再看就把開關打開，錄音中也可以隨時開關。
 - 影片全螢幕時字幕框也在最上面。網站把整個播放器放大成全螢幕時，照樣可以拖動、按 ×。如果全螢幕的只有影片本身（例如瀏覽器內建播放器的全螢幕鈕，畫面下方是瀏覽器的播放控制列），或播放器的寫法讓字幕框放不進去，字幕看得到，但拖不動、按不到 ×，要先退出全螢幕。
 - 字幕框只加在被錄音的那個分頁，停止錄音後就會拿掉。
 - 字體大小會跟著畫面寬度調整，全螢幕時比較大。
@@ -132,6 +135,7 @@ extension/   插件（Manifest V3）
 host/        本機轉文字程式（native messaging host，Python + faster-whisper，用 uv 管）
   vendor/llama.cpp/  install.sh 下載的 llama.cpp（Vulkan 版），雙語字幕用它的 llama-server 跑翻譯模型，不進 git
 tests/e2e.mjs  端到端測試：headless Brave 載入插件、播錄音、模擬點圖示、檢查文字稿與雙語字幕
+tests/test_repeats.py  本機程式縮短重複、判斷狀聲詞的單元測試（不需要模型）
 docs/research/ 選型筆記與速度量測
 ```
 
@@ -142,6 +146,7 @@ C=docs/research/tab-transcription/corpus
 node tests/e2e.mjs --audio $C/alice-one-syllable-ch02.mp3 --start 60 --duration 60 --bilingual toggle
 node tests/e2e.mjs --audio $C/gongitsune-01.mp3 --start 60 --duration 40 --lang ja --bilingual on
 node tests/e2e.mjs --audio $C/fleurs-th-dev.mp3 --start 0 --duration 84 --lang th --bilingual on
+host/.venv/bin/python -m unittest tests/test_repeats.py
 ```
 
 插件 ID 固定為 `pclblnfmncjbohcnbhlkgefpdhpljiae`（由 `manifest.json` 的 `key` 決定），`install.sh` 的登記檔只允許這個 ID 連線。
