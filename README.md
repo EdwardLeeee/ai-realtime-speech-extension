@@ -1,16 +1,17 @@
-# Tab Transcriber：英文／日文錄音轉文字稿
+# Tab Transcriber：英文／日文／泰文錄音轉文字稿
 
-Brave／Chrome 插件。把分頁正在播放的英文或日文錄音（練習網站、YouTube、Podcast 網頁……）轉成每句附時間的文字稿：
+Brave／Chrome 插件。把分頁正在播放的英文、日文或泰文錄音（練習網站、YouTube、Podcast 網頁……）轉成每句附時間的文字稿，可以再加上繁體中文的雙語字幕：
 
 ```
-[00:05] They must go by the mail, she thought, and how funny it'll seem to send shoes to one's own feet,
-[00:10] how odd the address will look.
+[00:00] They must go by the mail, she thought, and how funny it'll seem to send shoes to one's own feet, how odd the address will look.
+        她想，他們必須通過郵寄的方式來送東西。把鞋子寄到自己腳邊，會有多有趣啊！而地址的寫法也一定會很奇怪吧。
 ```
 
 - 在這台電腦上用 Whisper（faster-whisper）轉，聲音和文字都不會上傳。有 NVIDIA 顯示卡就用顯示卡跑 large-v3-turbo 模型，沒有就用 CPU 跑 small 模型。
 - 即時字幕：側邊欄最下面會出現淺色的字幕，用顯示卡時約每 1 秒更新一次（只有 CPU 時約 2 秒）；一句講完停頓後，再定稿成正式的一行。剛按開始時要先載入模型，第一行字幕會多等 2–3 秒。
+- 雙語字幕：側邊欄的「雙語字幕」開關打開時，每句原文下面會加上繁體中文翻譯，即時字幕也會一起翻。翻譯也在這台電腦上做（騰訊 Hy-MT2-1.8B 模型），錄音中可以隨時開關。詳見下面的「雙語字幕」。
 - 錄音時照常聽得到聲音。
-- 轉文字的程式只在錄音時啟動，停止後就結束，平常不常駐。錄音期間最多佔約 1.8 GB 系統記憶體（顯示卡模式；只有 CPU 時約 1.3 GB）。
+- 轉文字的程式只在錄音時啟動，停止後就結束，平常不常駐。錄音期間最多佔約 1.8 GB 系統記憶體（顯示卡模式；只有 CPU 時約 1.3 GB）。打開雙語字幕時，翻譯模型另外佔約 2 GB 顯示記憶體、0.9 GB 系統記憶體，關掉開關就釋放。
 
 ## 安裝（只要做一次）
 
@@ -20,7 +21,9 @@ Brave／Chrome 插件。把分頁正在播放的英文或日文錄音（練習�
    ~/Desktop/tofel/tab-transcriber/install.sh
    ```
 
-   這一步會建 Python 環境、下載 Whisper 模型，並在 Brave、Chrome 的設定資料夾登記「本機轉文字程式」的位置。偵測到 NVIDIA 驅動時，會另外裝顯示卡用的 CUDA 函式庫（約 2 GB）和 large-v3-turbo 模型（約 1.6 GB）。
+   這一步會建 Python 環境、下載 Whisper 模型和雙語字幕用的翻譯模型（約 2 GB），並在 Brave、Chrome 的設定資料夾登記「本機轉文字程式」的位置。偵測到 NVIDIA 驅動時，會另外裝顯示卡用的 CUDA 函式庫（約 2 GB）和 large-v3-turbo 模型（約 1.6 GB）。不需要雙語字幕的話，可以改成執行 `install.sh --no-translate`。
+
+   從舊版更新的話，也要再執行一次 `install.sh`，才會下載翻譯模型。已經下載過的檔案會核對後跳過。
 
 2. 在 Brave 網址列打開 `brave://extensions`（Chrome 用 `chrome://extensions`）。
 3. 打開右上角的「開發人員模式」。
@@ -31,7 +34,7 @@ Brave／Chrome 插件。把分頁正在播放的英文或日文錄音（練習�
 
 1. 打開要聽的錄音網頁，按播放。
 2. 點工具列的 Tab Transcriber 圖示：右側會打開側邊欄，用上次選的語言開始錄音（第一次是英文）。
-3. 語言不對的話：按「停止」，在左上的選單改成「日文」或「英文」，再按「開始」。選過的語言會記住。
+3. 語言不對的話：按「停止」，在左上的選單改成「英文」「日文」或「泰文」，再按「開始」。選過的語言會記住。
 4. 聽完按側邊欄的「停止」。
 5. 「複製」會把文字稿複製到剪貼簿，「下載 .txt」會存成文字檔。「清除」要連按兩次，避免誤刪。
 
@@ -42,6 +45,16 @@ Brave／Chrome 插件。把分頁正在播放的英文或日文錄音（練習�
 - 一次只錄一個分頁。錄音中到別的分頁點圖示只會打開側邊欄，不會切換；要先按「停止」，再到新分頁點圖示。
 - 一句話中間停頓超過 0.4 秒，偶爾會被切成兩行（例如 `look through to` / `the garden with one eye.`），文字本身不受影響。
 - 文字稿存在瀏覽器裡，關掉側邊欄或重開瀏覽器都還在，按「清除」才會刪掉。
+
+## 雙語字幕
+
+- 打開側邊欄的「雙語字幕」開關，就會把原文翻成繁體中文，放在每句下面；即時字幕的下一行也會出現譯文。開關會記住，錄音中也可以隨時切換。
+- 剛打開時要先載入翻譯模型，開關旁邊會顯示「載入翻譯模型…」，約 2–5 秒。之後每句定稿後約 0.5–1 秒出現譯文，即時字幕的譯文比原文晚 1 秒以內。
+- 英文、日文會等到句號（. ? ! 。）才一起翻，所以譯文出現在一句話的最後一行下面。逗號結尾的行先不翻，避免翻出半句。泰文幾乎不用標點，所以每一行各自翻；一句話被切成兩行時，那兩行的譯文可能不通順。
+- 只翻打開開關之後的句子，之前錄的不會補翻。關掉開關後，畫面、複製、下載都只有原文，已經翻好的譯文仍然保留，再打開就會顯示。
+- 只有 CPU 時，即時字幕不翻（一句要約 3 秒，跟不上每秒更新），只翻定稿。
+- 翻譯是 1.8B 的小模型，會翻錯，偶爾連意思都會相反。測試中看到的例子：泰文「不太可能被起訴」翻成「可能會被起訴」，日文「モズ（伯勞鳥）」翻成「貓頭鷹」，人名「ゴン」翻成「戈恩」或「岡」。請把譯文當參考。
+- 原文辨識錯的地方，譯文也會跟著錯。
 
 ## 換模型
 
@@ -61,7 +74,20 @@ Brave／Chrome 插件。把分頁正在播放的英文或日文錄音（練習�
 | `small.en`（只有 CPU 時的預設，英文） | CPU | 約 10 秒 | 1.3–2.1 秒 | 字幕約 2 秒更新一次 |
 | `small`（只有 CPU 時的預設，日文） | CPU | 約 12 秒 | 沒有量 | 有錯字，例如「穴から**はい出ました**」轉成「穴から入れました」 |
 
+泰文用 Google FLEURS 資料集的 40 句量字元錯誤率（越低越準）：
+
+| 模型 | 跑在 | 字元錯誤率 | 60 秒錄音要轉多久 | 說明 |
+|---|---|---|---|---|
+| `large-v3-turbo`（有顯示卡時的預設） | 顯示卡 | 12.3% | 約 3.5 秒 | 常見錯誤是拼字，例如 ร／ล 混淆（「ดังกล่าว」轉成「ดังกราว」） |
+| `large-v3` | 顯示卡 | 8.3% | 約 10 秒 | 最準，但即時字幕會變慢；顯示記憶體約 3.8 GB（turbo 約 2.2 GB），加上雙語字幕會超過 6 GB |
+| `medium` | 顯示卡 | 14.2% | 約 8 秒 | 比 turbo 慢又不比較準 |
+| `small`（只有 CPU 時的預設） | CPU | 19.1% | 約 21 秒 | 錯字多 |
+
+想讓泰文更準，可以在設定檔寫 `{ "gpu_models": { "th": "large-v3" } }`。
+
 改完下次按開始就會生效。第一次用新模型會先下載。
+
+翻譯模型也可以換：`"translate_model"` 填 GGUF 檔的完整路徑。例如改用 Hy-MT2-1.8B 的 Q4_K_M 版，顯示記憶體從約 1.9 GB 降到 1.2 GB，但譯文錯得比較多（把「small key」翻成「小鎖」、「midterm」翻成「中期考試」）。
 
 ## 疑難排解
 
@@ -70,12 +96,14 @@ Brave／Chrome 插件。把分頁正在播放的英文或日文錄音（練習�
 | 找不到本機轉文字程式 | 執行一次 `install.sh`，再按開始 |
 | 請切到要轉文字的分頁，點工具列上的圖示 | 回到播放錄音的分頁，點工具列圖示（不要按側邊欄的「開始」） |
 | 本機轉文字程式意外結束 | 看 `~/.cache/tab-transcriber/host.log` 的最後幾行 |
+| 翻譯模型還沒安裝 | 執行一次 `install.sh`（不要加 `--no-translate`），再打開雙語字幕 |
+| 翻譯模型啟動失敗 | 看 `~/.cache/tab-transcriber/llama-server.log` 的最後幾行 |
 
 ## 移除
 
 1. 在 `brave://extensions` 移除 Tab Transcriber。
 2. 執行 `~/Desktop/tofel/tab-transcriber/uninstall.sh`（刪除登記檔）。
-3. 不需要的話，再刪掉這個資料夾和 `~/.cache/huggingface/hub` 裡的 `faster-whisper` 模型。
+3. 不需要的話，再刪掉這個資料夾、`~/.cache/tab-transcriber`（翻譯模型和紀錄檔），以及 `~/.cache/huggingface/hub` 裡的 `faster-whisper` 模型。
 
 ## 開發
 
@@ -86,14 +114,18 @@ extension/   插件（Manifest V3）
   pcm-worklet.js  AudioWorklet，每 100 ms 交出一塊聲音
   sidepanel.*     側邊欄
 host/        本機轉文字程式（native messaging host，Python + faster-whisper，用 uv 管）
-tests/e2e.mjs  端到端測試：headless Brave 載入插件、播英文錄音、模擬點圖示、檢查文字稿
+  vendor/llama.cpp/  install.sh 下載的 llama.cpp（Vulkan 版），雙語字幕用它的 llama-server 跑翻譯模型，不進 git
+tests/e2e.mjs  端到端測試：headless Brave 載入插件、播錄音、模擬點圖示、檢查文字稿與雙語字幕
 docs/research/ 選型筆記與速度量測
 ```
 
 測試（要先執行過 `install.sh`）：
 
 ```bash
-node tests/e2e.mjs --audio <英文音檔.mp3> --start 60 --duration 75
+C=docs/research/tab-transcription/corpus
+node tests/e2e.mjs --audio $C/alice-one-syllable-ch02.mp3 --start 60 --duration 60 --bilingual toggle
+node tests/e2e.mjs --audio $C/gongitsune-01.mp3 --start 60 --duration 40 --lang ja --bilingual on
+node tests/e2e.mjs --audio $C/fleurs-th-dev.mp3 --start 0 --duration 84 --lang th --bilingual on
 ```
 
 插件 ID 固定為 `pclblnfmncjbohcnbhlkgefpdhpljiae`（由 `manifest.json` 的 `key` 決定），`install.sh` 的登記檔只允許這個 ID 連線。

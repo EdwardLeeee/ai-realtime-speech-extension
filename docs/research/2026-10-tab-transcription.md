@@ -10,6 +10,7 @@
 2. 這台電腦只用 CPU 就夠快。small.en 轉 60 秒錄音中位數 10.0 秒（最慢 10.1 秒），比播放快 6 倍。實際邊播邊轉時，每段 6–13 秒的錄音約 2–2.8 秒轉完，文字大約在講完一句後 3–15 秒出現。
 3. 比原先方案更省的地方：改用 native messaging，讓瀏覽器在錄音時才啟動本機程式、停止就結束。不用常駐伺服器，也不開本機網路埠。
 4. 建議維持 CPU＋small.en。之後若使用者在 Ubuntu 裝了 NVIDIA 驅動，再加 CUDA 函式庫改用 GPU＋medium.en。
+5. 後來追加的日文（第 7 節）、顯示卡與即時字幕（第 8 節）、泰文與可開關的雙語字幕（第 9 節）都已實作，並通過端到端測試。
 
 ## 名詞
 
@@ -161,13 +162,117 @@ large-v3 爆顯示記憶體時，桌面和 Brave 本身已經佔了約 2.2 GB。
   - 第一句定稿在 9.8–13.7 秒才出現
 - 已知現象：聲音停下時，最後一段的即時字幕偶爾會出現模型猜的字，最多約 6 秒後就會被定稿取代或清掉，不會進到文字稿。
 
-### 翻譯（暫停）
+### 翻譯（暫停，後來在第 9 節做成可開關的雙語字幕）
 
 - 使用者改口「可以不用即時翻譯」，所以暫停。
 - 已查證的候選：騰訊 Hy-MT2-1.8B（Apache-2.0、官方 GGUF、支援 ja 與 zh-Hant、Q8_0 1.9 GB），可以用 llama.cpp b11840 的 Vulkan 版跑，那一版看得到 RTX 2060。
 - 模型和 llama.cpp 已經下載，但還沒量速度和品質：
   - `~/.cache/tab-transcriber/models`，4.2 GB
   - `host/vendor/`，127 MB
+
+## 9. 追加：泰文與可開關的雙語字幕（2026-10-24）
+
+使用者：「泰文也加進去。我覺得即時雙語字幕可以作為一個可開關的功能，反正不會一直開著」。
+
+### 泰文辨識
+
+量法：Google FLEURS 泰文 dev 集（CC-BY-4.0，附人工逐字稿），每句只取第一位朗讀者，共 40 句（CPU 只量前 20 句）。泰文詞和詞之間不空格，所以比字元錯誤率（CER），計算前去掉空白和標點。工具是 `bench_fleurs.py`。
+
+| 模型 | 跑在 | 字元錯誤率 | 轉 1 秒錄音要多久 | 每句中位數 |
+|---|---|---|---|---|
+| large-v3 | 顯示卡 float16 | 8.3% | 0.170 秒 | 1.73 秒 |
+| large-v3 | 顯示卡 int8_float16 | 8.8% | 0.163 秒 | 1.69 秒 |
+| large-v3-turbo | 顯示卡 | 12.3% | 0.059 秒 | 0.55 秒 |
+| large-v3-turbo＋泰文示範句 | 顯示卡 | 12.9% | 0.057 秒 | 0.57 秒 |
+| medium | 顯示卡 | 14.2% | 0.128 秒 | 1.06 秒 |
+| small | 顯示卡 | 20.7% | 0.047 秒 | 0.48 秒 |
+| medium | CPU | 13.8% | 0.837 秒 | 8.78 秒 |
+| small | CPU | 19.1% | 0.352 秒 | 3.47 秒 |
+
+- 決定：顯示卡預設 large-v3-turbo，和英文、日文一致，即時字幕也快。large-v3 比較準，但顯示記憶體 3845 MiB（turbo 2180 MiB），加上翻譯模型會超過 6 GB，所以只寫進 README 當選項。
+- CPU 預設 small：medium 在 CPU 上轉 60 秒錄音要約 50 秒，加上即時字幕會跟不上。
+- 不加泰文示範句：泰文幾乎不用標點，加了也沒有變準（12.3% → 12.9%）。
+- 常見錯誤：
+  - ร／ล 混淆（「ดังกล่าว」轉成「ดังกราว」）
+  - 外來語被改寫成英文（「จอร์จ ดับเบิลยู. บุช」轉成「George W. Bush」、「อาร์กติก」轉成「Arctic」）
+  - 同音字（「ศาล（法院）」轉成「สาร」、「เหล็ก（鐵）」轉成「เล็ก（小）」）
+- e2e 用的泰文音檔：FLEURS 的 8 句，用 `make_fleurs_clip.py` 接成 83 秒，句子之間留 1.2 秒。
+
+### 翻譯模型：Hy-MT2-1.8B
+
+量法：`bench_translate.py`，用 llama.cpp b11840 的 Vulkan 版，模型全放顯示卡。句子取自 Whisper 實際轉出的文字（含辨識錯字）：英文 5 句、日文 4 句、泰文 6 句。
+
+| 設定 | 載入 | 每句中位數 | 最慢 | 顯示記憶體 |
+|---|---|---|---|---|
+| Q8_0，context 4096 | 4.5 秒（第一次讀檔） | 0.61 秒 | 2.97 秒（第一句暖機） | 2142 MiB |
+| Q8_0，context 1024 | 1.8 秒 | 0.51 秒 | 0.97 秒 | 1947 MiB |
+| Q8_0，context 1024，temperature 0 | 1.6 秒 | 0.58 秒 | 0.95 秒 | — |
+| Q4_K_M，context 1024 | 2.6 秒 | 0.48 秒 | 1.96 秒 | 1203 MiB |
+| Q8_0，只用 CPU（-ngl 0） | 1.2 秒 | 2.87 秒 | 3.68 秒 | — |
+
+- 泰文 6 句和 FLEURS 的人工中文譯文對照，意思大致正確。錯的地方多半來自辨識錯字，例如「เหล็ก（鐵）」被轉成「เล็ก（小）」，就翻成「小尺寸」。
+- 日文的專有名詞和動植物容易錯：「ゴン」翻成「戈恩」，「モズ（伯勞鳥）」翻成「貓頭鷹」或「鴿子」，「トンガラシ（辣椒）」翻成「藤蔓」。
+- e2e 看到一次意思相反：泰文「ไม่น่าจะโดนข้อหาทางอาญา（不太可能被刑事起訴）」翻成「可能會被起訴」。
+- Q4_K_M 錯得比 Q8_0 多，例如「small key」翻成「小鎖」、「midterm」翻成「中期考試」。所以用 Q8_0。
+- temperature 0（每次選機率最高的字）：
+  - 兩次跑的結果完全相同，品質和模型卡建議的 0.7 差不多。
+  - 即時字幕每秒重翻一次，用 0 譯文比較不會跳動，所以採用 0。
+- context 從 4096 降到 1024 只省約 200 MiB，因為顯示記憶體主要是模型本身。一次只翻一兩句，1024 就夠用，所以還是用 1024。
+
+### 和 Whisper 一起用顯示卡
+
+量法：`bench_bilingual.py`。兩個模型都載入後，另一條執行緒不停翻譯，同時量即時字幕要多久。這是最壞情況；實際上只有在有新句子時才翻。
+
+| 即時字幕（beam 1）| 3 秒 | 8 秒 | 15 秒 |
+|---|---|---|---|
+| 英文，只有 Whisper | 0.29 秒 | 0.33 秒 | 0.40 秒 |
+| 英文，同時在翻譯 | 0.48 秒 | 0.61 秒 | 0.75 秒 |
+| 泰文，只有 Whisper | 0.32 秒 | 0.41 秒 | 0.51 秒 |
+| 泰文，同時在翻譯 | 0.58 秒 | 0.81 秒 | 1.10 秒 |
+
+- 同時在轉文字時，翻譯每句中位數 0.79–0.86 秒。
+- 顯示記憶體：翻譯模型 1941 MiB、Whisper 2037 MiB，最高 4387 MiB。顯示卡是 6144 MiB，開始前桌面佔 261 MiB。
+- 結論：即時字幕也可以一起翻。最壞情況下，泰文長句的即時字幕更新會從每 1 秒拉長到約 1.1 秒。
+
+### 做法
+
+- **開關**：存在 `chrome.storage.local.bilingual`。背景程式聽 storage 變化，錄音中切換時送 `{type: "translate", enabled}` 給本機程式。
+- **啟動順序**：本機程式等 Whisper 載入完才啟動 llama-server。CUDA 載入失敗沒有退路，翻譯模型放不進顯示卡還可以改用 CPU（`-ngl 0`）。
+- **關掉開關**：
+  - 馬上結束 llama-server，把顯示記憶體還回去。
+  - llama-server 收到 SIGTERM 會先把翻到一半的那句翻完，實測要等好幾秒，所以只等 1 秒，之後直接 SIGKILL。
+- **不留殘留程序**：llama-server 用 `setpriv --pdeathsig TERM` 啟動，本機程式被強制結束時它也會跟著結束，不會繼續佔顯示記憶體（記取第 7 節的記憶體事故）。
+- **不拖慢轉文字**：翻譯在另一條執行緒。定稿優先，即時字幕只留最新一則；轉文字不等翻譯。
+- **不翻半句**：
+  - 半句話翻出來不通順。英文、日文的定稿會先湊到句尾標點（. ? ! 。？！）才一起翻，最多湊三段或等 6 秒。
+  - 譯文掛在這組的最後一段下面。
+  - 泰文沒有句號可依，每段各自翻。
+- **收尾**：停止錄音時，背景程式在最後一段後面送 `flush`。本機程式把手上的句子都翻完後回 `flushed`，背景程式收到才結束。
+- **CPU 模式**：只有 CPU 時不翻即時字幕。
+- **安裝**：
+  - install.sh 下載 llama.cpp Vulkan 版（35 MB）和 Hy-MT2-1.8B-Q8_0（1.9 GB），兩者都核對 SHA-256。
+  - 加 `--no-translate` 可以跳過。
+  - 沒裝就打開開關時，側邊欄提示執行 install.sh，並把開關關回去。
+
+### 端到端測試結果
+
+| 情境 | 結果 |
+|---|---|
+| 泰文 84 秒，雙語從頭開 | 9 句都有譯文；即時字幕更新 57 次，其中 54 次有譯文；更新間隔中位數 1.03 秒 |
+| 英文 60 秒，三分之一處打開、三分之二處關掉 | 打開後 3 秒內翻譯就緒；關掉後 0.3 秒內 llama-server 結束 |
+| 日文 40 秒，雙語從頭開 | 6 句湊成 3 組翻譯（逗號結尾的句子併進下一句）；即時字幕的譯文更新 29 次 |
+| 英文 25 秒，雙語關著（回歸測試） | 沒有翻譯，也沒有啟動 llama-server |
+| 英文 30 秒，只用 CPU 轉文字、雙語開著 | 4 句定稿都有譯文；即時字幕沒有翻 |
+| 翻譯模型路徑不存在 | 側邊欄提示「翻譯模型還沒安裝…」，開關關回去，轉文字照常 |
+
+每次結束後，瀏覽器、本機程式、llama-server 的殘留程序都是 0。
+
+### 翻譯的限制
+
+- 1.8B 的小模型會翻錯，偶爾意思相反，README 已經請使用者把譯文當參考。
+- 泰文一句話被切成兩段時，兩段會分開翻，譯文不通順。例如 e2e 的第一句前半「…แต่เล็กทำให้ล้อมไม้ของเกลียนเกิด」翻成「但萊克則用來固定格利安的木製結構」。
+- 只翻打開開關之後的句子，不補翻之前的。
+- 在沒有顯示卡的電腦上，Vulkan 版會直接用 CPU 跑，但側邊欄的狀態仍標成 gpu。這種電腦沒有實測過。
 
 ## 附錄
 
@@ -185,6 +290,17 @@ node tests/e2e.mjs --audio <英文音檔> --start 60 --duration 75 --shots /tmp/
 
 原始數據：`docs/research/tab-transcription/bench-results.jsonl`。
 
+第 9 節（泰文、翻譯）：
+
+```bash
+# FLEURS：https://huggingface.co/datasets/google/fleurs 的 data/th_th/dev.tsv 與 data/th_th/audio/dev.tar.gz
+host/.venv/bin/python docs/research/tab-transcription/bench_fleurs.py <th dev.tsv> <解壓後的 wav 資料夾> large-v3-turbo --device cuda
+python3 docs/research/tab-transcription/bench_translate.py host/vendor/llama.cpp/llama-server ~/.cache/tab-transcriber/models/Hy-MT2-1.8B-Q8_0.gguf --ctx 1024 --temperature 0
+cd docs/research/tab-transcription && ../../../host/.venv/bin/python bench_bilingual.py <llama-server> <模型.gguf> corpus/fleurs-th-dev.mp3 --lang th --start 0
+```
+
+原始數據：`bench-fleurs-th.jsonl`、`bench-translate.jsonl`、`bench-bilingual.jsonl`。
+
 ### 限制
 
 - 只測過 headless Brave，沒有測真的 Brave 視窗。以下要使用者實際操作才能確認：
@@ -192,7 +308,7 @@ node tests/e2e.mjs --audio <英文音檔> --start 60 --duration 75 --shots /tmp/
   - 聲音是否真的從喇叭出來（程式只檢查了 AudioContext 狀態是 running）
 - 只測過清楚的單人朗讀。多人對話、背景音樂、口音較重的錄音沒有測。
 - 切段用的是簡單的音量門檻。背景音樂一直很大聲時找不到停頓，會退回每 25 秒強制切一段。
-- 日文只量了 small；medium、large-v3-turbo 因為記憶體事故沒有量完。
+- 日文在第 7 節只量了 small；medium、large-v3-turbo 因為記憶體事故沒量完，第 8 節改用顯示卡補量。
 - 把上一段文字當提示時，如果錄音內容和提示一模一樣（只有人工測試才會發生），Whisper 會觸發重試，25 秒的段落要 12–14 秒才轉完。
 
 ### 來源
@@ -202,3 +318,7 @@ node tests/e2e.mjs --audio <英文音檔> --start 60 --duration 75 --shots /tmp/
 - Chrome for Developers, Translator API（Chrome 138 起、語言清單含 ja 與 zh-Hant）：https://developer.chrome.com/docs/ai/translator-api
 - Chromium blink-dev, Intent to Ship: On-device Web Speech API：https://groups.google.com/a/chromium.org/g/blink-dev/c/VNOok2dbmHM/m/TQpe9shjCgAJ
 - PyPI ctranslate2 4.8.3（有 cp39–cp314 wheel）：https://pypi.org/project/ctranslate2/
+- Google FLEURS 資料集（CC-BY-4.0，102 種語言的朗讀與逐字稿，各語言同一組句子）：https://huggingface.co/datasets/google/fleurs
+- 騰訊 Hy-MT2-1.8B 模型卡（33 種語言含泰文、繁體中文；翻譯提示與建議參數）：https://huggingface.co/tencent/Hy-MT2-1.8B
+- Hy-MT2-1.8B 官方 GGUF（Q4_K_M、Q6_K、Q8_0）：https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF
+- llama.cpp b11840 release（ubuntu-vulkan-x64 的 SHA-256 在 release 頁）：https://github.com/ggml-org/llama.cpp/releases/tag/b11840

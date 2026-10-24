@@ -1,19 +1,21 @@
-// 側邊欄：顯示錄音狀態和文字稿，提供開始／停止、複製、下載、清除。
+// 側邊欄：顯示錄音狀態和文字稿，提供開始／停止、雙語字幕開關、複製、下載、清除。
 // 狀態和文字稿都由背景程式寫進 storage，這裡只負責讀出來畫。
 
 const $ = (id) => document.getElementById(id);
 const ACTIVE = ['starting', 'recording', 'stopping'];
-const LANGUAGE_NAMES = { en: '英文', ja: '日文' };
+const LANGUAGE_NAMES = { en: '英文', ja: '日文', th: '泰文' };
 
 let state = {};
 let recordings = [];
 let language = 'en';
+let bilingual = false; // 雙語字幕開關：開著才顯示（和複製、下載）譯文
 let caption = null; // 還沒講完那一句的即時字幕 { recId, id, offset, text }
+let captionTr = null; // 即時字幕的譯文 { recId, id, text }
 let clearArmed = null;
 
 async function load() {
   ({ state = {} } = await chrome.storage.session.get('state'));
-  ({ recordings = [], language = 'en' } = await chrome.storage.local.get(['recordings', 'language']));
+  ({ recordings = [], language = 'en', bilingual = false } = await chrome.storage.local.get(['recordings', 'language', 'bilingual']));
   render();
 }
 
@@ -21,6 +23,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'session' && changes.state) state = changes.state.newValue ?? {};
   if (area === 'local' && changes.recordings) recordings = changes.recordings.newValue ?? [];
   if (area === 'local' && changes.language) language = changes.language.newValue ?? 'en';
+  if (area === 'local' && changes.bilingual) bilingual = Boolean(changes.bilingual.newValue);
   render();
 });
 
@@ -31,6 +34,10 @@ chrome.runtime.onMessage.addListener((msg) => {
     $('meter-fill').style.width = `${pct}%`;
   } else if (msg.type === 'caption') {
     caption = msg.text ? msg : null;
+    if (!caption) captionTr = null;
+    renderLive();
+  } else if (msg.type === 'caption-translation') {
+    captionTr = msg.text ? msg : null;
     renderLive();
   }
 });
@@ -64,6 +71,36 @@ function statusText() {
   }
 }
 
+function translatorHint() {
+  if (!bilingual || !ACTIVE.includes(state.status)) return '';
+  if (state.translator === 'loading') return '載入翻譯模型…';
+  if (state.translator === 'ready' && state.translatorDevice === 'cpu') return '用 CPU 翻譯，較慢';
+  return '';
+}
+
+// 一行文字稿：時間＋原文，雙語字幕開著而且有譯文時，原文下面再加一行中文。
+function makeLine(sec, text, translation, live = false) {
+  const line = document.createElement('p');
+  line.className = live ? 'line live' : 'line';
+  const time = document.createElement('time');
+  time.textContent = formatTime(sec);
+  const body = document.createElement('span');
+  body.className = 'body';
+  const src = document.createElement('span');
+  src.className = 'src';
+  src.textContent = text;
+  body.append(src);
+  if (bilingual && translation) {
+    const tr = document.createElement('span');
+    tr.className = 'tr';
+    tr.lang = 'zh-Hant';
+    tr.textContent = translation;
+    body.append(tr);
+  }
+  line.append(time, body);
+  return line;
+}
+
 function render() {
   const active = ACTIVE.includes(state.status);
   const scroller = document.scrollingElement;
@@ -79,6 +116,8 @@ function render() {
 
   $('language').value = active ? state.language ?? language : language;
   $('language').disabled = active;
+  $('bilingual').checked = bilingual;
+  $('bilingual-hint').textContent = translatorHint();
 
   const toggle = $('toggle');
   toggle.textContent = state.status === 'stopping' ? '收尾中…' : active ? '停止' : '開始';
@@ -105,16 +144,7 @@ function render() {
     title.textContent = r.title || '（沒有標題的分頁）';
     head.append(title, ` · ${LANGUAGE_NAMES[r.language ?? 'en']} · ${formatDate(r.startedAt)}`);
     main.append(head);
-    for (const seg of r.segments) {
-      const line = document.createElement('p');
-      line.className = 'line';
-      const time = document.createElement('time');
-      time.textContent = formatTime(seg.start);
-      const text = document.createElement('span');
-      text.textContent = seg.text;
-      line.append(time, text);
-      main.append(line);
-    }
+    for (const seg of r.segments) main.append(makeLine(seg.start, seg.text, seg.translation));
   }
   if (active) {
     const live = document.createElement('div');
@@ -123,6 +153,7 @@ function render() {
     renderLive(false);
   } else {
     caption = null;
+    captionTr = null;
   }
 
   updateElapsed();
@@ -136,14 +167,9 @@ function renderLive(keepBottom = true) {
   const scroller = document.scrollingElement;
   const atBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 48;
   if (caption && caption.recId === state.recId) {
-    const line = document.createElement('p');
-    line.className = 'line live';
-    const time = document.createElement('time');
-    time.textContent = formatTime(caption.offset);
-    const text = document.createElement('span');
-    text.textContent = caption.text;
-    line.append(time, text);
-    live.replaceChildren(line);
+    // 譯文比原文慢一點才到：只顯示同一句（同一個 id）的譯文。
+    const tr = captionTr?.id === caption.id && captionTr.recId === caption.recId ? captionTr.text : '';
+    live.replaceChildren(makeLine(caption.offset, caption.text, tr, true));
   } else {
     const working = document.createElement('p');
     working.className = 'working';
@@ -167,9 +193,13 @@ function transcriptText() {
         `來源：${r.title || '（沒有標題的分頁）'}`,
         r.url ? `網址：${r.url}` : null,
         `語言：${LANGUAGE_NAMES[r.language ?? 'en']}`,
+        bilingual && r.segments.some((s) => s.translation) ? '翻譯：繁體中文（這台電腦上的翻譯模型，僅供參考）' : null,
         `開始：${formatDate(r.startedAt)}（時間從開始錄音算起）`,
         '',
-        ...r.segments.map((s) => `[${formatTime(s.start)}] ${s.text}`),
+        ...r.segments.flatMap((s) => {
+          const head = `[${formatTime(s.start)}] `;
+          return bilingual && s.translation ? [head + s.text, ' '.repeat(head.length) + s.translation] : [head + s.text];
+        }),
       ]
         .filter((l) => l !== null)
         .join('\n'),
@@ -184,6 +214,8 @@ function flash(button, text) {
 }
 
 $('language').addEventListener('change', (e) => chrome.storage.local.set({ language: e.target.value }));
+// 錄音中也可以切換：背景程式聽 storage 的變化，馬上通知本機程式啟動或關掉翻譯模型。
+$('bilingual').addEventListener('change', (e) => chrome.storage.local.set({ bilingual: e.target.checked }));
 
 $('toggle').addEventListener('click', async () => {
   if (ACTIVE.includes(state.status)) {

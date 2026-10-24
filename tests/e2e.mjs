@@ -1,10 +1,12 @@
-// 端到端測試：用暫時的 Brave 設定檔載入插件，在測試網頁播英文錄音，模擬點插件圖示，最後檢查文字稿。
+// 端到端測試：用暫時的 Brave 設定檔載入插件，在測試網頁播錄音，模擬點插件圖示，最後檢查文字稿與雙語字幕。
 //
 // 先執行過 ./install.sh：Brave 只到預設設定資料夾（~/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts）
 // 找本機程式的註冊檔，就算用 --user-data-dir 換了設定檔也一樣（2026-10 在 Brave 155 實測）。
 //
 // 用法：node tests/e2e.mjs --audio <音檔> [--start 60] [--duration 75] [--profile <暫存資料夾>]
-//                          [--lang en|ja] [--browser brave-browser] [--headful] [--shots <截圖資料夾>]
+//                          [--lang en|ja|th] [--bilingual off|on|toggle] [--browser brave-browser] [--headful] [--shots <截圖資料夾>]
+//   --bilingual on      一開始就打開雙語字幕，檢查每組句子的譯文、即時字幕的譯文，停止後翻譯模型要結束
+//   --bilingual toggle  錄到三分之一時打開、三分之二時關掉，檢查翻譯模型會啟動、關掉後會結束
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -26,6 +28,7 @@ const { values: opt } = parseArgs({
     headful: { type: 'boolean', default: false },
     shots: { type: 'string' },
     lang: { type: 'string', default: 'en' },
+    bilingual: { type: 'string', default: 'off' },
   },
 });
 if (!opt.audio) throw new Error('需要 --audio <音檔>');
@@ -190,6 +193,27 @@ async function shutdownBrowser() {
   return profileProcesses();
 }
 
+// 本機程式和它啟動的翻譯模型（llama-server）：瀏覽器關掉後都要跟著結束。
+function hostProcesses() {
+  const found = { host: [], llama: [] };
+  for (const d of fs.readdirSync('/proc')) {
+    if (!/^\d+$/.test(d)) continue;
+    try {
+      const args = fs.readFileSync(`/proc/${d}/cmdline`, 'utf8').split('\0');
+      if (args.some((a) => a.endsWith('/host/transcriber_host.py'))) found.host.push(Number(d));
+      if (args[0]?.endsWith('/host/vendor/llama.cpp/llama-server')) found.llama.push(Number(d));
+    } catch {}
+  }
+  return found;
+}
+async function waitFor(fn, ms) {
+  for (let t = 0; t < ms; t += 250) {
+    if (fn()) return true;
+    await sleep(250);
+  }
+  return fn();
+}
+
 let failed = false;
 const check = (ok, label) => {
   log(`${ok ? 'PASS' : 'FAIL'} ${label}`);
@@ -211,17 +235,23 @@ try {
   if (!tabTarget) throw new Error('找不到測試網頁的 tab target');
   // 側邊欄頁面先開好，在裡面設定語言（等於使用者在選單選了語言）。
   const panel = await openTab(`chrome-extension://${id}/sidepanel.html`);
-  await evaluate(panel.sessionId, `chrome.storage.local.set({ language: ${JSON.stringify(opt.lang)} })`);
+  await evaluate(
+    panel.sessionId,
+    `chrome.storage.local.set({ language: ${JSON.stringify(opt.lang)}, bilingual: ${opt.bilingual === 'on'} })`,
+  );
   // 記錄即時字幕每次變化、第一句定稿出現的時間（相對於點圖示）。
   await evaluate(
     panel.sessionId,
     `(() => {
       window.__captions = [];
+      window.__trCaptions = [];
       window.__firstFinal = null;
       new MutationObserver(() => {
-        const text = document.querySelector('.line.live span')?.textContent;
+        const text = document.querySelector('.line.live .src')?.textContent;
         const last = window.__captions.at(-1);
         if (text && text !== last?.text) window.__captions.push({ t: performance.now(), text });
+        const tr = document.querySelector('.line.live .tr')?.textContent;
+        if (tr && tr !== window.__trCaptions.at(-1)?.text) window.__trCaptions.push({ t: performance.now(), text: tr });
         if (!window.__firstFinal && document.querySelector('.line:not(.live)')) window.__firstFinal = performance.now();
       }).observe(document.getElementById('transcript'), { childList: true, subtree: true, characterData: true });
     })()`,
@@ -241,35 +271,62 @@ try {
   let last = '';
   let meterMax = 0;
   let warning = '';
-  const deadline = Date.now() + (duration + 5) * 1000;
+  let llamaSeen = false; // 錄音中看到過翻譯模型的程序
+  let device = '';
+  let toggledOn = false;
+  let toggledOff = false;
+  const recStart = Date.now();
+  const deadline = recStart + (duration + 5) * 1000;
+  let shotTaken = false;
+  const clickBilingual = () => evaluate(panel.sessionId, `document.getElementById('bilingual').click()`);
   while (Date.now() < deadline) {
     await sleep(3000);
     const { state, recordings } = await getState();
     const segs = recordings.at(-1)?.segments ?? [];
-    const line = `狀態=${state.status} host=${state.host} 模型=${state.model} 排隊=${state.pending} 句數=${segs.length}`;
+    const translated = segs.filter((s) => s.translation).length;
+    const line =
+      `狀態=${state.status} host=${state.host} 模型=${state.model} 排隊=${state.pending} 句數=${segs.length}` +
+      ` 翻譯=${state.translator ?? '關'}${state.translatorDevice ? '/' + state.translatorDevice : ''} 有譯文=${translated}`;
     if (line !== last) log(line);
     last = line;
     if (state.status === 'error') throw new Error(state.message);
     if (state.message) warning = state.message;
+    if (state.device) device = state.device;
     const meter = await evaluate(panel.sessionId, `parseFloat(document.getElementById('meter-fill').style.width) || 0`);
     meterMax = Math.max(meterMax, meter);
+    if (hostProcesses().llama.length) llamaSeen = true;
+    const elapsed = (Date.now() - recStart) / 1000;
+    // 錄音中的截圖在還有聲音時拍，才拍得到即時字幕（和它的譯文）。
+    if (opt.shots && !shotTaken && elapsed >= duration * 0.6) {
+      shotTaken = true;
+      fs.mkdirSync(opt.shots, { recursive: true });
+      await cdp('Emulation.setDeviceMetricsOverride', { width: 400, height: 760, deviceScaleFactor: 1, mobile: false }, panel.sessionId);
+      for (const scheme of ['light', 'dark']) {
+        await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] }, panel.sessionId);
+        await sleep(300);
+        const { data } = await cdp('Page.captureScreenshot', { format: 'png' }, panel.sessionId);
+        fs.writeFileSync(path.join(opt.shots, `panel-recording-${scheme}.png`), Buffer.from(data, 'base64'));
+      }
+    }
+    if (opt.bilingual === 'toggle' && !toggledOn && elapsed >= duration / 3) {
+      log('在側邊欄打開雙語字幕');
+      await clickBilingual();
+      toggledOn = true;
+    } else if (opt.bilingual === 'toggle' && toggledOn && !toggledOff && elapsed >= (duration * 2) / 3) {
+      check(llamaSeen, '打開雙語字幕後有啟動翻譯模型');
+      log('在側邊欄關掉雙語字幕');
+      await clickBilingual();
+      toggledOff = true;
+      const gone = await waitFor(() => !hostProcesses().llama.length, 5000);
+      check(gone, '關掉雙語字幕後 5 秒內翻譯模型已結束');
+    }
   }
   check(!warning, `錄音中沒有警告（${warning || '無'}）`);
   check(meterMax > 20, `音量條有在動（最高 ${meterMax.toFixed(0)}%）`);
-  if (opt.shots) {
-    fs.mkdirSync(opt.shots, { recursive: true });
-    await cdp('Emulation.setDeviceMetricsOverride', { width: 400, height: 760, deviceScaleFactor: 1, mobile: false }, panel.sessionId);
-    for (const scheme of ['light', 'dark']) {
-      await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] }, panel.sessionId);
-      await sleep(300);
-      const { data } = await cdp('Page.captureScreenshot', { format: 'png' }, panel.sessionId);
-      fs.writeFileSync(path.join(opt.shots, `panel-recording-${scheme}.png`), Buffer.from(data, 'base64'));
-    }
-  }
 
   const live = await evaluate(
     panel.sessionId,
-    `({ t0: window.__t0, firstFinal: window.__firstFinal, captions: window.__captions })`,
+    `({ t0: window.__t0, firstFinal: window.__firstFinal, captions: window.__captions, trCaptions: window.__trCaptions })`,
   );
   const caps = live.captions;
   const gaps = caps.slice(1).map((c, i) => (c.t - caps[i].t) / 1000).sort((a, b) => a - b);
@@ -281,6 +338,12 @@ try {
   );
   check(caps.length >= Math.floor(duration / 5), `錄音中有即時字幕（${caps.length} 次更新）`);
   check(firstCap !== null && (firstFinal === null || firstCap < firstFinal), '即時字幕比定稿先出現');
+  if (opt.bilingual !== 'off') {
+    log(`即時字幕的譯文：更新 ${live.trCaptions.length} 次，最後一次「${live.trCaptions.at(-1)?.text ?? ''}」`);
+    // 只有 CPU 時即時字幕不翻（一句要 3 秒，跟不上每秒一次），只翻定稿。
+    if (device === 'cuda') check(live.trCaptions.length >= 3, `即時字幕也有譯文（${live.trCaptions.length} 次更新）`);
+    else check(live.trCaptions.length === 0, `CPU 模式不翻即時字幕（${live.trCaptions.length} 次）`);
+  }
   log('按側邊欄的「停止」');
   await evaluate(panel.sessionId, `document.getElementById('toggle').click()`);
   let final;
@@ -290,6 +353,8 @@ try {
     if (final.state.status === 'idle' || final.state.status === 'error') break;
   }
   check(final.state.status === 'idle', `停止後回到待命（狀態=${final.state.status}，訊息=${final.state.message || '無'}）`);
+  const llamaGone = await waitFor(() => !hostProcesses().llama.length, 5000);
+  check(llamaGone, '停止後翻譯模型已結束');
   const contexts = await cdp('Target.getTargets');
   const offscreenLeft = contexts.targetInfos.some((t) => t.url.endsWith('/offscreen.html'));
   check(!offscreenLeft, '停止後錄音頁已關閉');
@@ -334,23 +399,48 @@ try {
 
   const segs = final.recordings.at(-1)?.segments ?? [];
   const text = segs.map((s) => s.text).join(' ');
-  // 日文沒有空格，用字元數；英文用字數。一般朗讀英文每秒 2–3 字、日文每秒 5–8 字。
-  const count = opt.lang === 'ja' ? text.replace(/\s/g, '').length : text.split(/\s+/).filter(Boolean).length;
-  const minCount = duration * (opt.lang === 'ja' ? 3 : 1);
-  check(segs.length > 0, `轉出 ${segs.length} 句、${count} 個${opt.lang === 'ja' ? '字元' : '字'}`);
+  // 日文、泰文詞和詞之間不空格，用字元數；英文用字數。一般朗讀英文每秒 2–3 字、日文每秒 5–8 字、泰文每秒約 10 字。
+  const byChar = opt.lang !== 'en';
+  const count = byChar ? text.replace(/\s/g, '').length : text.split(/\s+/).filter(Boolean).length;
+  const minCount = duration * (byChar ? 3 : 1);
+  check(segs.length > 0, `轉出 ${segs.length} 句、${count} 個${byChar ? '字元' : '字'}`);
   check(count >= minCount, `字數合理（至少 ${minCount}）`);
   check(final.recordings.at(-1)?.language === opt.lang, `文字稿標記的語言是 ${opt.lang}`);
   // 本機程式用來示範標點的提示句（host/transcriber_host.py STYLE_PROMPTS）不能被念進文字稿。
   const leaked = segs.filter((s) => /today's lecture|いいお天気/i.test(s.text));
   check(leaked.length === 0, `文字稿沒有混入提示句（${leaked.length} 句）`);
-  const punctuated = /[.,?!。、？！]/.test(text);
-  check(punctuated, '文字稿有標點');
+  // 泰文本來就幾乎不用標點，只檢查是泰文字。
+  if (opt.lang === 'th') {
+    check(/\p{Script=Thai}/u.test(text), '文字稿是泰文');
+    if (start === 0 && duration >= 25) check(text.includes('1767'), '文字稿有第二句的「1767」');
+  } else {
+    check(/[.,?!。、？！]/.test(text), '文字稿有標點');
+  }
   const monotonic = segs.every((s, i) => i === 0 || s.start >= segs[i - 1].start);
   check(monotonic, '時間依序遞增');
   const lastEnd = segs.at(-1)?.end ?? 0;
   check(lastEnd <= duration + 15, `最後一句結束在 ${lastEnd.toFixed(1)} 秒，沒有超出錄音長度`);
+  // 雙語字幕：譯文接在一組句子的最後一句上（本機程式湊到句尾標點才翻）。
+  const translated = segs.filter((s) => s.translation);
+  const trText = translated.map((s) => s.translation).join('');
+  if (opt.bilingual === 'off') {
+    check(translated.length === 0 && !llamaSeen, '沒開雙語字幕時沒有翻譯，也沒有啟動翻譯模型');
+  } else {
+    check(translated.length > 0, `有譯文（${translated.length}／${segs.length} 句）`);
+    if (opt.bilingual === 'on') check(Boolean(segs.at(-1)?.translation), '停止前最後一句也翻了');
+    const han = (trText.match(/\p{Script=Han}/gu) ?? []).length;
+    const letters = (trText.match(/\p{L}/gu) ?? []).length;
+    check(han / Math.max(1, letters) > 0.7, `譯文是中文（漢字佔 ${((han / Math.max(1, letters)) * 100).toFixed(0)}%）`);
+    const simplified = trText.match(/[这们个时说为会对来发过还没样问题与见经关现进开实点长东车门买卖头写读学习业电话认识让请谢语钱铁轮华国图场动应无当从]/g) ?? [];
+    check(simplified.length === 0, `譯文是繁體字（簡體字 ${simplified.length} 個${simplified.length ? '：' + simplified.join('') : ''}）`);
+    const source = { ja: /[\p{Script=Hiragana}\p{Script=Katakana}]/u, th: /\p{Script=Thai}/u }[opt.lang];
+    check(!source || !source.test(trText), '譯文沒有夾著原文');
+  }
   console.log('\n----- 文字稿 -----');
-  for (const s of segs) console.log(`[${s.start.toFixed(1).padStart(6)}] ${s.text}`);
+  for (const s of segs) {
+    console.log(`[${s.start.toFixed(1).padStart(6)}] ${s.text}`);
+    if (s.translation) console.log(`         ${s.translation}`);
+  }
   console.log('------------------\n');
 
   if (opt.shots) {
@@ -372,6 +462,12 @@ try {
   server.close();
   const left = await shutdownBrowser();
   check(left.length === 0, `瀏覽器已完全關閉（殘留程序 ${left.length} 個）`);
+  await waitFor(() => !hostProcesses().host.length && !hostProcesses().llama.length, 5000);
+  const orphans = hostProcesses();
+  check(
+    !orphans.host.length && !orphans.llama.length,
+    `本機程式與翻譯模型都已結束（殘留 ${orphans.host.length} + ${orphans.llama.length} 個）`,
+  );
 }
 log(failed ? '測試失敗' : '全部通過');
 process.exit(failed ? 1 : 0);

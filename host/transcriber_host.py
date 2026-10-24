@@ -1,51 +1,80 @@
 """Tab Transcriber 的本機轉文字程式（Chrome/Brave native messaging host）。
 
-插件錄到的分頁聲音切成一段段 16 kHz 單聲道 PCM 送進來，這裡用 faster-whisper 轉成附時間的英文或日文文字。
+插件錄到的分頁聲音切成一段段 16 kHz 單聲道 PCM 送進來，這裡用 faster-whisper 轉成附時間的英文、日文或泰文文字。
+打開雙語字幕時，另外啟動本機翻譯模型（Hy-MT2，跑在 llama.cpp 的 llama-server），把文字翻成繁體中文。
 瀏覽器在插件連線時啟動這支程式，斷線就結束，所以平常不佔記憶體。
 
 訊息格式：每則前面 4 位元組 little-endian 長度，後面接 UTF-8 JSON。
-  收  {"type": "start", "language": "en" | "ja"}（連線後第一則，決定載入哪個模型）
+  收  {"type": "start", "language": "en" | "ja" | "th", "translate": false}（連線後第一則，決定載入哪個模型）
       {"type": "audio", "id": 3, "offset": 12.5, "pcm": "<base64，int16 LE 單聲道 16 kHz>"}（講完的一句，定稿）
       {"type": "partial", "id": 4, "offset": 20.1, "pcm": "..."}（還沒講完的一句，即時字幕）
+      {"type": "translate", "enabled": true}（錄音中打開或關掉雙語字幕）
+      {"type": "flush"}（錄音停了：手上還沒翻的句子翻完後回 flushed）
   送  {"type": "status", "state": "loading" | "ready", "model": ..., "device": ..., "language": ...}
       {"type": "segments", "id": 3, "segments": [{"start": 12.9, "end": 15.1, "text": "..."}], "elapsed": 1.2}
       {"type": "partial", "id": 4, "offset": 20.1, "text": "..."}（失敗時 text 為空字串）
+      {"type": "translator", "state": "loading" | "ready" | "off" | "error", "device": "gpu" | "cpu", "message": ...}
+      {"type": "translation", "start": 12.9, "text": "..."}（一組句子的譯文；start 是這組最後一句的開始時間）
+      {"type": "partial-translation", "id": 4, "text": "..."}（即時字幕的譯文）
+      {"type": "flushed"}
       {"type": "error", "id": 3, "message": "..."}
 """
 
 import base64
 import json
 import logging
+import re
+import shutil
+import socket
 import struct
+import subprocess
 import sys
+import threading
 import time
+import urllib.request
+from collections import deque
 from pathlib import Path
 
 SAMPLE_RATE = 16000
 CONFIG_PATH = Path.home() / ".config" / "tab-transcriber" / "config.json"
-LOG_PATH = Path.home() / ".cache" / "tab-transcriber" / "host.log"
-LANGUAGES = ("en", "ja")
+CACHE_DIR = Path.home() / ".cache" / "tab-transcriber"
+LOG_PATH = CACHE_DIR / "host.log"
+LLAMA_SERVER = Path(__file__).resolve().parent / "vendor" / "llama.cpp" / "llama-server"  # install.sh 下載
+LANGUAGES = ("en", "ja", "th")
 DEFAULT_CONFIG = {
     # CPU 用的模型；速度與準確度見 docs/research/2026-10-tab-transcription.md
-    "models": {"en": "small.en", "ja": "small"},
+    "models": {"en": "small.en", "ja": "small", "th": "small"},
     # 偵測到 CUDA 時改用；RTX 2060 上 60 秒錄音約 1.9 秒轉完，即時字幕單次 0.3–0.4 秒
-    "gpu_models": {"en": "large-v3-turbo", "ja": "large-v3-turbo"},
+    "gpu_models": {"en": "large-v3-turbo", "ja": "large-v3-turbo", "th": "large-v3-turbo"},
     "device": "auto",  # auto | cpu | cuda
     "cpu_threads": 8,
     "beam_size": 5,
     "partial_beam_size": 1,  # 即時字幕求快；定稿再用 beam_size
+    # 雙語字幕的翻譯模型（install.sh 下載）；Q8_0 比 Q4_K_M 準，顯示記憶體約 1.9 GB
+    "translate_model": str(CACHE_DIR / "models" / "Hy-MT2-1.8B-Q8_0.gguf"),
+    "translate_gpu_layers": 99,  # 全部放顯示卡；載入失敗會改用 CPU
+    "translate_context": 1024,  # 一次只翻一兩句，不需要長 context
 }
 PROMPT_CHARS = 200  # 把上一段結尾當提示，讓跨段的句子接得上
 # 放在提示最前面，示範要有標點與大小寫：large-v3-turbo 從句子中間開始聽時，不給這段會輸出全小寫、沒有標點
 # （docs/research/2026-10-tab-transcription.md）。
+# 泰文幾乎不用標點，加示範句也沒有變準（FLEURS 字元錯誤率 12.3% → 12.9%），所以不加。
 STYLE_PROMPTS = {
     "en": "Hello, everyone. Welcome to today's lecture. Let's get started.",
     "ja": "こんにちは。今日は、いいお天気ですね。それでは、始めましょう。",
 }
+# Hy-MT2 模型卡的翻譯提示（中文提示配中文語言名）
+TRANSLATE_PROMPT = "将以下文本翻译为繁体中文，注意只需要输出翻译后的结果，不要额外解释：\n\n{text}"
+# 半句話翻出來常常不通順，所以定稿先湊到句尾標點再翻。泰文句子之間只空格、不用句號，Whisper 的每一段就當一句。
+SENTENCE_END = {"en": re.compile(r"[.?!][\"')\]]*$"), "ja": re.compile(r"[。？！?!」』）]$")}
+JOINERS = {"ja": ""}
+MAX_UNIT_SEGMENTS = 3  # 最多湊三段就翻，免得一直等不到句號
+HOLD_S = 6.0  # 等不到下一段定稿就先翻手上的半句
 
 # stdout 只能拿來傳訊息；函式庫印的東西一律改去 stderr，以免弄壞通訊格式。
 _out = sys.stdout.buffer
 _in = sys.stdin.buffer
+_send_lock = threading.Lock()  # 翻譯執行緒也會送訊息
 sys.stdout = sys.stderr
 log = logging.getLogger("tab-transcriber")
 
@@ -63,8 +92,9 @@ def read_message():
 
 def send(msg):
     data = json.dumps(msg, ensure_ascii=False).encode("utf-8")
-    _out.write(struct.pack("<I", len(data)) + data)
-    _out.flush()
+    with _send_lock:
+        _out.write(struct.pack("<I", len(data)) + data)
+        _out.flush()
 
 
 def load_config():
@@ -110,7 +140,7 @@ def transcribe(model, config, language, msg, prompt, beam_size=None):
         language=language,
         beam_size=beam_size or config["beam_size"],
         vad_filter=True,
-        initial_prompt=f"{STYLE_PROMPTS[language]} {prompt}".strip(),
+        initial_prompt=f"{STYLE_PROMPTS.get(language, '')} {prompt}".strip() or None,
     )
     out = []
     for seg in segments:
@@ -120,6 +150,253 @@ def transcribe(model, config, language, msg, prompt, beam_size=None):
                 {"start": round(offset + seg.start, 2), "end": round(offset + seg.end, 2), "text": text}
             )
     return out
+
+
+class Translator:
+    """雙語字幕：在另一條執行緒用 llama-server 翻成繁體中文，轉文字不用等翻譯。
+
+    定稿優先，即時字幕只留最新一則。只在打開雙語字幕時才啟動 llama-server，關掉就結束它，把顯示記憶體還回去。
+    """
+
+    def __init__(self, config, language, partials):
+        self.config = config
+        self.language = language
+        self.partials = partials  # 即時字幕也翻；只有顯示卡模式才開，CPU 一句要 3 秒，跟不上每秒一次
+        self.cv = threading.Condition()
+        self.enabled = False
+        self.closed = False
+        self.generation = 0  # 每次關掉就加一，關掉前排隊或翻到一半的結果都丟掉
+        self.finals = deque()  # ("unit", 最後一段的 start, 原文) 或 ("flush",)
+        self.held = []  # 還沒等到句尾的定稿 [(start, text)]
+        self.held_at = 0.0
+        self.partial = None  # (id, text)
+        self.proc = None
+        self.port = None
+        self.proc_lock = threading.Lock()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    # ---- 主執行緒呼叫 ----
+
+    def set_enabled(self, on):
+        with self.cv:
+            if on == self.enabled:
+                return
+            self.enabled = on
+            if not on:
+                self.generation += 1
+                self.finals.clear()
+                self.held.clear()
+                self.partial = None
+            self.cv.notify()
+        if not on:
+            # 直接收掉，不等翻到一半的那句；翻譯執行緒的請求會失敗，結果本來就要丟掉。
+            self._stop_server()
+            send({"type": "translator", "state": "off"})
+
+    def add_segments(self, segments):
+        with self.cv:
+            if not self.enabled:
+                return
+            for seg in segments:
+                self.held.append((seg["start"], seg["text"]))
+                pattern = SENTENCE_END.get(self.language)
+                if pattern is None or pattern.search(seg["text"]) or len(self.held) >= MAX_UNIT_SEGMENTS:
+                    self._release()
+            self.held_at = time.monotonic()
+            self.cv.notify()
+
+    def add_partial(self, msg_id, text):
+        if not text or not self.partials:
+            return
+        with self.cv:
+            if self.enabled:
+                self.partial = (msg_id, text)
+                self.cv.notify()
+
+    def flush(self):
+        with self.cv:
+            if self.enabled:
+                self._release()
+                self.finals.append(("flush",))
+                self.cv.notify()
+                return
+        send({"type": "flushed"})
+
+    def close(self):
+        with self.cv:
+            self.closed = True
+            self.cv.notify()
+        self._stop_server()
+
+    # ---- 翻譯執行緒 ----
+
+    def _release(self):
+        if self.held:
+            text = JOINERS.get(self.language, " ").join(t for _, t in self.held)
+            self.finals.append(("unit", self.held[-1][0], text))
+            self.held = []
+
+    def _next_job(self):
+        if self.closed:
+            return ("exit",)
+        if not self.enabled:
+            return ("stop",) if self.proc else None
+        if self.proc is None:
+            return ("start",)
+        if self.held and time.monotonic() - self.held_at >= HOLD_S:
+            self._release()
+        if self.finals:
+            return self.finals.popleft()
+        if self.partial:
+            job, self.partial = ("partial", *self.partial), None
+            return job
+        return None
+
+    def _run(self):
+        while True:
+            with self.cv:
+                while (job := self._next_job()) is None:
+                    self.cv.wait(timeout=0.5)
+                generation = self.generation
+            if job[0] == "exit":
+                self._stop_server()
+                return
+            try:
+                self._do(job, generation)
+            except Exception:
+                # 這條執行緒死掉的話，側邊欄會一直顯示翻譯就緒卻等不到譯文，所以收掉 server、明說翻譯停了。
+                log.exception("translator job failed: %s", job[0])
+                self._stop_server()
+                self._give_up(f"翻譯程式出錯而停止，詳細原因在 {LOG_PATH}。")
+
+    def _do(self, job, generation):
+        kind = job[0]
+        if kind == "stop":
+            self._stop_server()  # 關掉時剛好載入完成的 server
+        elif kind == "start":
+            self._start_server(generation)
+        elif kind == "flush":
+            send({"type": "flushed"})
+        else:
+            text = self._translate(job[-1])
+            with self.cv:
+                if generation != self.generation or text is None:
+                    return
+            if kind == "unit":
+                send({"type": "translation", "start": job[1], "text": text})
+            else:
+                send({"type": "partial-translation", "id": job[1], "text": text})
+
+    def _give_up(self, message):
+        """翻譯用不了：關掉雙語字幕，告訴側邊欄原因。之後要再打開開關才會重試。"""
+        with self.cv:
+            self.enabled = False
+            self.generation += 1
+            self.finals.clear()
+            self.held.clear()
+            self.partial = None
+        send({"type": "translator", "state": "error", "message": message})
+        send({"type": "flushed"})  # 正在等收尾的話不用再等翻譯
+
+    def _start_server(self, generation):
+        model = Path(self.config["translate_model"]).expanduser()
+        if not LLAMA_SERVER.exists() or not model.exists():
+            missing = LLAMA_SERVER if not LLAMA_SERVER.exists() else model
+            log.error("translator missing: %s", missing)
+            self._give_up("翻譯模型還沒安裝，請在終端機執行一次 tab-transcriber/install.sh。")
+            return
+        send({"type": "translator", "state": "loading"})
+        gpu_layers = int(self.config["translate_gpu_layers"])
+        for layers in dict.fromkeys((gpu_layers, 0)):
+            started = time.perf_counter()
+            proc, port = self._spawn(model, layers)
+            if self._wait_ready(proc, port, generation):
+                with self.proc_lock:
+                    self.proc, self.port = proc, port
+                device = "gpu" if layers else "cpu"
+                if not layers:
+                    self.partials = False
+                log.info("translator ready device=%s load=%.1fs", device, time.perf_counter() - started)
+                send({"type": "translator", "state": "ready", "device": device})
+                return
+            self._terminate(proc)
+            with self.cv:
+                if generation != self.generation or self.closed:
+                    return  # 載入途中被關掉了
+            log.error("llama-server failed to start with -ngl %s (see llama-server.log)", layers)
+        self._give_up(f"翻譯模型啟動失敗，詳細原因在 {CACHE_DIR / 'llama-server.log'}。")
+
+    def _spawn(self, model, layers):
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        cmd = [str(LLAMA_SERVER), "-m", str(model), "-ngl", str(layers), "-c", str(self.config["translate_context"]),
+               "-np", "1", "--host", "127.0.0.1", "--port", str(port), "--no-webui"]
+        # 本機程式被強制結束時，setpriv 設的 pdeathsig 會讓 llama-server 跟著結束，不會留在背景佔顯示記憶體。
+        if shutil.which("setpriv"):
+            cmd = ["setpriv", "--pdeathsig", "TERM", "--", *cmd]
+        logfile = open(CACHE_DIR / "llama-server.log", "wb")
+        try:
+            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=logfile, stderr=subprocess.STDOUT)
+        finally:
+            logfile.close()
+        return proc, port
+
+    def _wait_ready(self, proc, port, generation):
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                return False
+            with self.cv:
+                if generation != self.generation or self.closed:
+                    return False
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1) as r:
+                    if r.status == 200:
+                        return True
+            except Exception:
+                time.sleep(0.2)
+        return False
+
+    def _translate(self, text):
+        payload = {
+            "messages": [{"role": "user", "content": TRANSLATE_PROMPT.format(text=text)}],
+            # 每次選機率最高的字：同一句不會這次翻這樣、下次翻那樣，即時字幕比較不會跳
+            "temperature": 0,
+            "repeat_penalty": 1.05,
+            "max_tokens": 512,
+        }
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}/v1/chat/completions",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.load(r)["choices"][0]["message"]["content"].strip()
+        except Exception:
+            log.exception("translate failed")
+            if self.proc and self.proc.poll() is not None:
+                self._stop_server()
+                self._give_up(f"翻譯模型意外結束，詳細原因在 {CACHE_DIR / 'llama-server.log'}。")
+            return None
+
+    def _stop_server(self):
+        with self.proc_lock:
+            proc, self.proc = self.proc, None
+        if proc:
+            self._terminate(proc)
+            log.info("translator stopped")
+
+    @staticmethod
+    def _terminate(proc):
+        # llama-server 收到 SIGTERM 會先把正在翻的那句翻完（實測要好幾秒），等一秒不走就直接收掉。
+        proc.terminate()
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
 
 
 def incoming(first):
@@ -153,9 +430,29 @@ def main():
     log.info("ready model=%s device=%s language=%s", name, device, language)
     send({"type": "status", "state": "ready", "model": name, "device": device, "language": language})
 
+    # Whisper 先載入完才啟動翻譯模型：CUDA 載入失敗沒有退路，翻譯模型放不進顯示卡還可以改用 CPU。
+    translator = Translator(config, language, partials=device == "cuda")
+    if first.get("translate"):
+        translator.set_enabled(True)
+    try:
+        run(model, config, language, translator, first)
+    finally:
+        translator.close()
+    log.info("browser disconnected")
+    return 0
+
+
+def run(model, config, language, translator, first):
     prompt = ""
     for msg in incoming(first):
-        if msg.get("type") == "partial":
+        kind = msg.get("type")
+        if kind == "translate":
+            translator.set_enabled(bool(msg.get("enabled")))
+            continue
+        if kind == "flush":
+            translator.flush()
+            continue
+        if kind == "partial":
             try:
                 segments = transcribe(model, config, language, msg, prompt, config["partial_beam_size"])
                 text = " ".join(s["text"] for s in segments)
@@ -163,8 +460,9 @@ def main():
                 log.exception("partial failed id=%s", msg.get("id"))
                 text = ""
             send({"type": "partial", "id": msg.get("id"), "offset": msg.get("offset", 0), "text": text})
+            translator.add_partial(msg.get("id"), text)
             continue
-        if msg.get("type") != "audio":
+        if kind != "audio":
             continue
         started = time.perf_counter()
         try:
@@ -179,11 +477,10 @@ def main():
                  msg.get("id"), audio_s, elapsed, len(segments))
         send({"type": "segments", "id": msg.get("id"), "segments": segments,
               "elapsed": round(elapsed, 2)})
+        translator.add_segments(segments)
         text = " ".join(s["text"] for s in segments)
         if text:
             prompt = (prompt + " " + text)[-PROMPT_CHARS:]
-    log.info("browser disconnected")
-    return 0
 
 
 def download(gpu):

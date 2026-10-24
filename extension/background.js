@@ -2,9 +2,11 @@
 //
 // 資料放哪裡：
 //   chrome.storage.session.state     目前狀態（側邊欄讀它顯示「錄音中」等）
-//   chrome.storage.local.recordings  文字稿 [{ id, title, url, language, startedAt, segments: [{ start, end, text }] }]
-//   chrome.storage.local.language    側邊欄選的語言（en | ja），下次開始錄音時生效
-// 即時字幕（還沒講完的那一句）每秒更新，不寫 storage，直接用 runtime 訊息 { type: 'caption' } 推給側邊欄。
+//   chrome.storage.local.recordings  文字稿 [{ id, title, url, language, startedAt, segments: [{ start, end, text, translation? }] }]
+//   chrome.storage.local.language    側邊欄選的語言（en | ja | th），下次開始錄音時生效
+//   chrome.storage.local.bilingual   雙語字幕開關；錄音中切換會馬上通知本機程式啟動或關掉翻譯模型
+// 即時字幕（還沒講完的那一句）每秒更新，不寫 storage，直接用 runtime 訊息 { type: 'caption' } 推給側邊欄，
+// 它的譯文用 { type: 'caption-translation' }。
 
 const HOST_NAME = 'com.tab_transcriber.host';
 const OFFSCREEN_URL = 'offscreen.html';
@@ -24,10 +26,12 @@ const IDLE = {
   recId: null,
   startedAt: null,
   pending: 0,
+  translator: null, // null（雙語字幕關著）| loading | ready
+  translatorDevice: '', // gpu | cpu
 };
 
 let port = null; // 和本機程式的連線，只在錄音期間存在
-let rec = null; // 目前這次錄音 { id, tabId, pending, stopping, captureDone, lastFinalId, partialInFlight, queuedPartial }
+let rec = null; // 目前這次錄音 { id, tabId, pending, stopping, captureDone, lastFinalId, partialInFlight, queuedPartial, translate, flushPending }
 let stopTimer = null;
 let writes = Promise.resolve(); // 依序寫 storage，避免同時讀改寫互相蓋掉
 
@@ -57,6 +61,10 @@ chrome.storage.session.get('state').then(async ({ state }) => {
     await closeOffscreen();
     await setState({ ...IDLE, status: 'error', message: '瀏覽器重新啟動了背景程式，錄音已中斷。請再按一次開始。' });
   }
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.bilingual) setTranslate(Boolean(changes.bilingual.newValue));
 });
 
 chrome.action.onClicked.addListener((tab) => {
@@ -113,6 +121,8 @@ async function start(tab) {
     lastFinalId: 0,
     partialInFlight: false,
     queuedPartial: null,
+    translate: false,
+    flushPending: false,
   };
   const { language = 'en' } = await chrome.storage.local.get('language');
   await setState({ ...IDLE, status: 'starting', tabId: tab.id, title: tab.title ?? '', recId: id, language });
@@ -122,7 +132,10 @@ async function start(tab) {
     // 拿到的 streamId 幾秒內沒用就失效，本機程式約 0.1 秒就會回第一則訊息，來得及。
     const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
     await connectHost();
-    port.postMessage({ type: 'start', language });
+    const { bilingual = false } = await chrome.storage.local.get('bilingual');
+    rec.translate = bilingual;
+    port.postMessage({ type: 'start', language, translate: bilingual });
+    if (bilingual) setState({ translator: 'loading' });
     const reply = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'start', streamId });
     if (!reply?.ok) throw new Error(reply?.error ?? '無法開始錄音');
     const startedAt = Date.now();
@@ -158,7 +171,21 @@ function onCaptureDone(reason) {
     setState({ status: 'stopping', message: reason === 'ended' ? '分頁已關閉或換頁，錄音已停止。' : '' });
   }
   rec.captureDone = true;
+  // 錄音頁的最後一段已經比 'stopped' 先送進本機程式，所以 flush 一定排在所有定稿後面。
+  if (rec.translate && port) {
+    rec.flushPending = true;
+    port.postMessage({ type: 'flush' });
+  }
   maybeFinish();
+}
+
+// 側邊欄切換雙語字幕：錄音中就通知本機程式；收尾時不再切換，免得等不到 flushed。
+function setTranslate(on) {
+  if (!rec || !port || rec.stopping || rec.translate === on) return;
+  rec.translate = on;
+  port.postMessage({ type: 'translate', enabled: on });
+  if (!on) sendCaptionTranslation(null);
+  setState({ translator: on ? 'loading' : null, translatorDevice: '' });
 }
 
 function onChunk(msg) {
@@ -183,6 +210,12 @@ function sendCaption(caption) {
   chrome.runtime.sendMessage({ type: 'caption', recId: rec?.id ?? null, ...(caption ?? { text: '' }) }).catch(() => {});
 }
 
+function sendCaptionTranslation(tr) {
+  chrome.runtime
+    .sendMessage({ type: 'caption-translation', recId: rec?.id ?? null, ...(tr ?? { text: '' }) })
+    .catch(() => {});
+}
+
 function onHostMessage(msg) {
   if (!rec) return;
   if (msg.type === 'status') {
@@ -194,6 +227,26 @@ function onHostMessage(msg) {
     const next = rec.queuedPartial;
     rec.queuedPartial = null;
     if (next) onPartial(next);
+  } else if (msg.type === 'translator') {
+    if (msg.state === 'error') {
+      // 翻譯用不了（沒安裝、啟動失敗）：把開關關回去，轉文字照常繼續。
+      rec.translate = false;
+      setState({ translator: null, translatorDevice: '', message: msg.message });
+      chrome.storage.local.set({ bilingual: false });
+    } else if (rec.translate && msg.state !== 'off') {
+      setState({ translator: msg.state, translatorDevice: msg.device ?? '' });
+    }
+  } else if (msg.type === 'translation') {
+    const recId = rec.id;
+    updateRecordings((list) => {
+      const seg = list.find((r) => r.id === recId)?.segments.findLast((s) => s.start === msg.start);
+      if (seg) seg.translation = msg.text;
+    });
+  } else if (msg.type === 'partial-translation') {
+    if (rec.translate && msg.id > rec.lastFinalId && msg.text) sendCaptionTranslation({ id: msg.id, text: msg.text });
+  } else if (msg.type === 'flushed') {
+    rec.flushPending = false;
+    maybeFinish();
   } else if (msg.type === 'segments' || (msg.type === 'error' && msg.id != null)) {
     const recId = rec.id;
     rec.lastFinalId = Math.max(rec.lastFinalId, msg.id);
@@ -210,7 +263,7 @@ function onHostMessage(msg) {
 }
 
 function maybeFinish() {
-  if (rec?.stopping && rec.captureDone && rec.pending === 0) finish();
+  if (rec?.stopping && rec.captureDone && rec.pending === 0 && !rec.flushPending) finish();
 }
 
 async function finish(message) {

@@ -15,11 +15,20 @@
     </div>
     <div id="source" class="source"></div>
     <div class="meter" aria-hidden="true"><div id="meter-fill" class="meter-fill"></div></div>
-    <div class="actions">
+    <div class="options">
       <select id="language" aria-label="錄音的語言">
         <option value="en">英文</option>
         <option value="ja">日文</option>
+        <option value="th">泰文</option>
       </select>
+      <label class="switch" title="在每句原文下面加上繁體中文翻譯（用這台電腦上的翻譯模型）">
+        <input id="bilingual" type="checkbox" role="switch">
+        <span class="track" aria-hidden="true"></span>
+        雙語字幕
+      </label>
+      <span id="bilingual-hint" class="hint"></span>
+    </div>
+    <div class="actions">
       <button id="toggle" class="primary" type="button">開始</button>
       <button id="copy" type="button">複製</button>
       <button id="download" type="button">下載 .txt</button>
@@ -32,7 +41,8 @@
 
   <section id="empty" class="empty">
     <p>先在上面選好語言，再到播放錄音的分頁點瀏覽器工具列的 <strong>Tab Transcriber</strong> 圖示，就會開始。</p>
-    <p>每句前面的時間是從開始錄音算起。文字稿只存在這台電腦。</p>
+    <p>打開「雙語字幕」，每句下面會加上繁體中文翻譯，錄音中也可以隨時開關。</p>
+    <p>每句前面的時間是從開始錄音算起。聲音、文字稿和翻譯都只在這台電腦上處理。</p>
   </section>
 
   <script src="sidepanel.js" type="module"></script>
