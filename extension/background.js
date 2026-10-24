@@ -5,8 +5,10 @@
 //   chrome.storage.local.recordings  文字稿 [{ id, title, url, language, startedAt, segments: [{ start, end, text, translation? }] }]
 //   chrome.storage.local.language    側邊欄選的語言（en | ja | th），下次開始錄音時生效
 //   chrome.storage.local.bilingual   雙語字幕開關；錄音中切換會馬上通知本機程式啟動或關掉翻譯模型
+//   chrome.storage.local.overlay     網頁字幕開關（預設開）；overlayPos 是網頁字幕的位置，由 caption-overlay.js 存
 // 即時字幕（還沒講完的那一句）每秒更新，不寫 storage，直接用 runtime 訊息 { type: 'caption' } 推給側邊欄，
 // 它的譯文用 { type: 'caption-translation' }。
+// 網頁字幕（caption-overlay.js）注入在被錄的分頁裡，用 tabs.sendMessage 推上一句定稿和正在講的這一句。
 
 const HOST_NAME = 'com.tab_transcriber.host';
 const OFFSCREEN_URL = 'offscreen.html';
@@ -31,7 +33,7 @@ const IDLE = {
 };
 
 let port = null; // 和本機程式的連線，只在錄音期間存在
-let rec = null; // 目前這次錄音 { id, tabId, pending, stopping, captureDone, lastFinalId, partialInFlight, queuedPartial, translate, flushPending }
+let rec = null; // 目前這次錄音 { id, tabId, pending, stopping, captureDone, lastFinalId, partialInFlight, queuedPartial, translate, flushPending, overlay, lines }
 let stopTimer = null;
 let writes = Promise.resolve(); // 依序寫 storage，避免同時讀改寫互相蓋掉
 
@@ -65,6 +67,7 @@ chrome.storage.session.get('state').then(async ({ state }) => {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.bilingual) setTranslate(Boolean(changes.bilingual.newValue));
+  if (area === 'local' && changes.overlay) setOverlay(changes.overlay.newValue !== false);
 });
 
 chrome.action.onClicked.addListener((tab) => {
@@ -96,7 +99,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       onPartial(msg);
       break;
     case 'partial-reset':
-      if (rec) rec.queuedPartial = null;
+      if (!rec) break;
+      rec.queuedPartial = null;
       sendCaption(null);
       break;
     case 'stopped':
@@ -123,6 +127,8 @@ async function start(tab) {
     queuedPartial: null,
     translate: false,
     flushPending: false,
+    overlay: false, // 網頁字幕已經注入分頁
+    lines: { prev: null, live: null }, // 網頁字幕顯示的上一句定稿 { start, text, tr } 和即時字幕 { id, text, tr }
   };
   const { language = 'en' } = await chrome.storage.local.get('language');
   await setState({ ...IDLE, status: 'starting', tabId: tab.id, title: tab.title ?? '', recId: id, language });
@@ -148,6 +154,8 @@ async function start(tab) {
       startedAt,
       message: muted ? '正在錄音，但瀏覽器沒讓聲音播回喇叭；在分頁上點一下再試，或停止後重新開始。' : '',
     });
+    const { overlay = true } = await chrome.storage.local.get('overlay');
+    setOverlay(overlay);
   } catch (err) {
     await fail(explain(err));
   }
@@ -185,6 +193,7 @@ function setTranslate(on) {
   rec.translate = on;
   port.postMessage({ type: 'translate', enabled: on });
   if (!on) sendCaptionTranslation(null);
+  pushOverlay();
   setState({ translator: on ? 'loading' : null, translatorDevice: '' });
 }
 
@@ -208,12 +217,50 @@ function onPartial(msg) {
 
 function sendCaption(caption) {
   chrome.runtime.sendMessage({ type: 'caption', recId: rec?.id ?? null, ...(caption ?? { text: '' }) }).catch(() => {});
+  const live = rec.lines.live;
+  rec.lines.live = caption ? { id: caption.id, text: caption.text, tr: live?.id === caption.id ? live.tr : '' } : null;
+  pushOverlay();
 }
 
 function sendCaptionTranslation(tr) {
   chrome.runtime
     .sendMessage({ type: 'caption-translation', recId: rec?.id ?? null, ...(tr ?? { text: '' }) })
     .catch(() => {});
+  const live = rec.lines.live;
+  if (live && (!tr || tr.id === live.id)) live.tr = tr?.text ?? '';
+  pushOverlay();
+}
+
+// 網頁字幕：錄音中打開就注入分頁（點過圖示的分頁有 activeTab，不用另外要網站權限），關掉就請它移除自己。
+async function setOverlay(on) {
+  if (!rec || rec.overlay === on) return;
+  const { tabId } = rec;
+  if (!on) {
+    rec.overlay = false;
+    removeOverlay(tabId);
+    return;
+  }
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['caption-overlay.js'] });
+  } catch (err) {
+    console.warn('網頁字幕注入失敗', err);
+    return;
+  }
+  if (rec?.tabId !== tabId) return removeOverlay(tabId);
+  rec.overlay = true;
+  pushOverlay();
+}
+
+function removeOverlay(tabId) {
+  chrome.tabs.sendMessage(tabId, { target: 'overlay', type: 'remove' }, { frameId: 0 }).catch(() => {});
+}
+
+function pushOverlay() {
+  if (!rec?.overlay) return;
+  const lines = [rec.lines.prev, rec.lines.live]
+    .filter((l) => l?.text)
+    .map((l) => ({ text: l.text, tr: rec.translate ? l.tr : '' }));
+  chrome.tabs.sendMessage(rec.tabId, { target: 'overlay', type: 'update', lines }, { frameId: 0 }).catch(() => {});
 }
 
 function onHostMessage(msg) {
@@ -242,6 +289,10 @@ function onHostMessage(msg) {
       const seg = list.find((r) => r.id === recId)?.segments.findLast((s) => s.start === msg.start);
       if (seg) seg.translation = msg.text;
     });
+    if (rec.lines.prev?.start === msg.start) {
+      rec.lines.prev.tr = msg.text;
+      pushOverlay();
+    }
   } else if (msg.type === 'partial-translation') {
     if (rec.translate && msg.id > rec.lastFinalId && msg.text) sendCaptionTranslation({ id: msg.id, text: msg.text });
   } else if (msg.type === 'flushed') {
@@ -250,6 +301,8 @@ function onHostMessage(msg) {
   } else if (msg.type === 'segments' || (msg.type === 'error' && msg.id != null)) {
     const recId = rec.id;
     rec.lastFinalId = Math.max(rec.lastFinalId, msg.id);
+    const last = msg.segments?.at(-1);
+    if (last) rec.lines.prev = { start: last.start, text: last.text, tr: '' };
     sendCaption(null);
     rec.pending = Math.max(0, rec.pending - 1);
     if (msg.segments?.length) {
@@ -268,6 +321,7 @@ function maybeFinish() {
 
 async function finish(message) {
   clearTimeout(stopTimer);
+  if (rec) removeOverlay(rec.tabId);
   port?.disconnect();
   port = null;
   rec = null;
@@ -281,6 +335,7 @@ async function finish(message) {
 
 async function fail(message) {
   clearTimeout(stopTimer);
+  if (rec) removeOverlay(rec.tabId);
   port?.disconnect();
   port = null;
   rec = null;

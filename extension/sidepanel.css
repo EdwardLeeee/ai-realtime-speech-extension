@@ -102,7 +102,7 @@ body {
 .switch input:checked + .track::after { transform: translateX(14px); }
 .switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .switch .track, .switch .track::after { transition: none; } }
-/* 提示放在開關下面自己一行，不把 A−／A+ 擠下去 */
+/* 提示放在開關下面自己一行 */
 .hint { order: 1; flex-basis: 100%; color: var(--muted); font-size: 12px; }
 .hint:empty { display: none; }
 
@@ -129,7 +129,7 @@ button.quiet { margin-left: auto; color: var(--muted); }
 button.quiet.armed { color: var(--rec); border-color: var(--rec); }
 /* 放大、收起、字體大小：小一點的次要按鈕 */
 button.tool { min-height: 28px; padding: 0 8px; color: var(--muted); font-size: 13px; }
-.text-size { display: inline-flex; gap: 4px; margin-left: auto; }
+.text-size { display: inline-flex; gap: 4px; }
 
 .message {
   margin: 10px 0 0;
@@ -140,8 +140,8 @@ button.tool { min-height: 28px; padding: 0 8px; color: var(--muted); font-size: 
   font-size: 13px;
 }
 
-/* --text-size 由 A−／A+ 設定，裡面的字級都用 em 跟著縮放；視窗放大時一行不要拉得太長 */
-.transcript { max-width: 64em; padding: 4px 14px 24px; font-size: var(--text-size, 14px); }
+/* --text-size 由 A−／A+ 設定，裡面的字級都用 em 跟著縮放 */
+.transcript { padding: 4px 14px 24px; font-size: var(--text-size, 14px); }
 
 .rec-head {
   margin: 16px 0 6px;

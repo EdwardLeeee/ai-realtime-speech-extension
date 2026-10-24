@@ -57,7 +57,8 @@ const server = http.createServer((req, res) => {
   }
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(`<!doctype html><title>English Listening Practice</title>
-<h1>Listening</h1><audio id="a" controls preload="auto" src="/audio#t=${start},${start + duration}"></audio>`);
+<h1>Listening</h1><audio id="a" controls preload="auto" src="/audio#t=${start},${start + duration}"></audio>
+<div id="player" style="width:480px;height:270px;background:#234"></div>`);
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const pageUrl = `http://127.0.0.1:${server.address().port}/`;
@@ -271,73 +272,134 @@ try {
         .then(([s, l]) => ({ state: s.state ?? {}, recordings: l.recordings ?? [] }))`,
     );
 
+  const until = async (fn, ms = 5000) => {
+    for (let t = 0; t < ms; t += 200) {
+      const v = await fn();
+      if (v) return v;
+      await sleep(200);
+    }
+    return fn();
+  };
+  const attach = async (targetId) => {
+    const { sessionId } = await cdp('Target.attachToTarget', { targetId, flatten: true });
+    await cdp('Runtime.enable', {}, sessionId);
+    return sessionId;
+  };
+  const screenshot = async (sessionId, name) => {
+    if (!opt.shots) return;
+    fs.mkdirSync(opt.shots, { recursive: true });
+    const { data } = await cdp('Page.captureScreenshot', { format: 'png' }, sessionId);
+    fs.writeFileSync(path.join(opt.shots, name), Buffer.from(data, 'base64'));
+  };
+
   // 側邊欄上面的按鈕，在點圖示時真的打開的那個側邊欄上按（上面那個側邊欄分頁只是方便讀狀態）：
-  // A+、放大成獨立視窗、回到側邊欄、收起後錄音繼續、再點圖示側邊欄回來而且不會重新開始。
+  // A+、收起後錄音繼續、再點圖示側邊欄回來而且不會重新開始。
   async function checkPanelButtons(recId) {
-    const targets = async () =>
-      (await cdp('Target.getTargets')).targetInfos.filter(
-        (t) => t.url.startsWith(`chrome-extension://${id}/sidepanel.html`) && t.targetId !== panel.targetId,
+    const sidePanel = async () =>
+      (await cdp('Target.getTargets')).targetInfos.find(
+        (t) => t.url === `chrome-extension://${id}/sidepanel.html` && t.targetId !== panel.targetId,
       );
-    const sidePanel = async () => (await targets()).find((t) => !t.url.includes('?'));
-    const popup = async () => (await targets()).find((t) => t.url.includes('?window='));
-    const until = async (fn, ms = 5000) => {
-      for (let t = 0; t < ms; t += 200) {
-        const v = await fn();
-        if (v) return v;
-        await sleep(200);
-      }
-      return fn();
-    };
-    const attach = async (targetId) => {
-      const { sessionId } = await cdp('Target.attachToTarget', { targetId, flatten: true });
-      await cdp('Runtime.enable', {}, sessionId);
-      return sessionId;
-    };
     const fontSize = (sid) => evaluate(sid, `getComputedStyle(document.getElementById('transcript')).fontSize`);
     const click = (sid, button) => evaluate(sid, `document.getElementById('${button}').click()`);
 
-    let sp = await attach((await sidePanel()).targetId);
+    const sp = await attach((await sidePanel()).targetId);
     const before = await fontSize(sp);
     await click(sp, 'bigger');
     await sleep(300);
     const after = await fontSize(sp);
     check(parseFloat(after) > parseFloat(before), `按 A+ 字變大（${before} → ${after}）`);
-
-    await click(sp, 'popout');
-    const win = await until(popup);
-    const panelClosed = await until(async () => !(await sidePanel()));
-    check(Boolean(win) && panelClosed, '按「放大」開出獨立視窗，側邊欄收起');
-    const ws = await attach(win.targetId);
-    const winText = await until(
-      () => evaluate(ws, `document.querySelector('.line.live .src')?.textContent || document.querySelector('.line')?.textContent || ''`),
-      10000,
-    );
-    check(Boolean(winText), `獨立視窗裡有字幕（${winText.slice(0, 40)}）`);
-    if (opt.shots) {
-      fs.mkdirSync(opt.shots, { recursive: true });
-      for (const scheme of ['light', 'dark']) {
-        await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] }, ws);
-        await sleep(300);
-        const { data } = await cdp('Page.captureScreenshot', { format: 'png' }, ws);
-        fs.writeFileSync(path.join(opt.shots, `window-recording-${scheme}.png`), Buffer.from(data, 'base64'));
-      }
-    }
-
-    await click(ws, 'dock');
-    const docked = await until(async () => !(await popup()) && (await sidePanel()));
-    check(Boolean(docked), '按「回到側邊欄」視窗關掉、側邊欄回來');
-    sp = await attach(docked.targetId);
-    await sleep(300);
-    check((await fontSize(sp)) === after, '側邊欄記得自己的字體大小');
     await click(sp, 'smaller');
 
     await click(sp, 'collapse');
-    check(await until(async () => !(await targets()).length), '按「收起」側邊欄關掉');
+    check(await until(async () => !(await sidePanel())), '按「收起」側邊欄關掉');
     await sleep(1000);
     check((await getState()).state.status === 'recording', '收起後還在錄音');
     await cdp('Target.activateTarget', { targetId: page.targetId });
     await cdp('Extensions.triggerAction', { id, targetId: tabTarget.targetId });
     check(Boolean(await until(sidePanel)) && (await getState()).state.recId === recId, '再點圖示側邊欄回來，還是同一次錄音');
+  }
+
+  // 網頁字幕（caption-overlay.js）：在測試網頁上浮著、有字；拖得動、點擊不會傳到網頁（YouTube 點一下會暫停）；
+  // 全螢幕時搬進全螢幕的元素而且在最上面；按 × 會拿掉並關掉側邊欄的開關；再打開開關又出現。
+  async function checkOverlay() {
+    const ps = page.sessionId;
+    await cdp('Target.activateTarget', { targetId: page.targetId });
+    await cdp('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false }, ps);
+    const info = () =>
+      evaluate(
+        ps,
+        `(() => {
+          const host = document.querySelector('tab-transcriber-caption');
+          if (!host) return null;
+          const r = host.shadowRoot.querySelector('.box').getBoundingClientRect();
+          const c = host.shadowRoot.querySelector('.close').getBoundingClientRect();
+          return {
+            open: host.matches(':popover-open'),
+            parent: host.parentNode.id || host.parentNode.tagName,
+            top: document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === host,
+            text: host.shadowRoot.querySelector('.line')?.textContent ?? '',
+            tr: host.shadowRoot.querySelector('.tr')?.textContent ?? '',
+            cx: r.left + r.width / 2, cy: r.top + r.height / 2, bottom: r.bottom,
+            close: [c.left + c.width / 2, c.top + c.height / 2],
+          };
+        })()`,
+      );
+    const mouse = (type, x, y) =>
+      cdp('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount: 1 }, ps);
+
+    const shown = await until(async () => {
+      const i = await info();
+      return i?.open && i.text ? i : null;
+    }, 10000);
+    check(Boolean(shown?.top), `網頁上有浮動字幕（${shown?.text.slice(0, 40) ?? '沒有'}）`);
+    if (!shown) return;
+    await screenshot(ps, 'page-overlay.png');
+
+    await evaluate(ps, `window.__clicks = 0; document.addEventListener('click', () => window.__clicks++)`);
+    await mouse('mousePressed', shown.cx, shown.cy);
+    await mouse('mouseReleased', shown.cx, shown.cy);
+    await mouse('mousePressed', shown.cx, shown.cy);
+    for (let i = 1; i <= 5; i++) await mouse('mouseMoved', shown.cx - 30 * i, shown.cy - 25 * i);
+    await mouse('mouseReleased', shown.cx - 150, shown.cy - 125);
+    await sleep(300);
+    const moved = await info();
+    const saved = (await evaluate(panel.sessionId, `chrome.storage.local.get('overlayPos')`)).overlayPos;
+    const clicks = await evaluate(ps, `window.__clicks`);
+    const dx = moved.cx - shown.cx;
+    const dy = moved.bottom - shown.bottom;
+    check(
+      Math.abs(dx + 150) < 3 && Math.abs(dy + 125) < 3 && Boolean(saved) && clicks === 0,
+      `拖得動、位置有存、點擊沒有傳到網頁（移動 ${dx.toFixed(0)}, ${dy.toFixed(0)}；網頁收到 ${clicks} 次點擊）`,
+    );
+
+    await evaluate(ps, `document.getElementById('player').requestFullscreen()`);
+    const full = await until(async () => {
+      const i = await info();
+      return i?.parent === 'player' && i.open ? i : null;
+    }, 3000);
+    check(Boolean(full?.top), '全螢幕時字幕搬進播放器，在最上面，滑鼠點得到');
+    await screenshot(ps, 'page-overlay-fullscreen.png');
+    await evaluate(ps, `document.exitFullscreen()`);
+    check(
+      Boolean(await until(async () => { const i = await info(); return i?.parent === 'HTML' && i.open && i.top; }, 3000)),
+      '退出全螢幕後字幕回到網頁上',
+    );
+
+    const before = await info();
+    await mouse('mousePressed', ...before.close);
+    await mouse('mouseReleased', ...before.close);
+    const gone = await until(async () => !(await info()), 3000);
+    await sleep(300);
+    const stored = (await evaluate(panel.sessionId, `chrome.storage.local.get('overlay')`)).overlay;
+    const checked = await evaluate(panel.sessionId, `document.getElementById('overlay').checked`);
+    check(gone && stored === false && !checked, '按 × 字幕不見，側邊欄的「網頁字幕」開關也關掉');
+
+    await evaluate(panel.sessionId, `document.getElementById('overlay').click()`);
+    check(Boolean(await until(async () => (await info())?.open, 5000)), '再打開「網頁字幕」開關，字幕又出現');
+    if (opt.bilingual === 'on') {
+      const tr = await until(async () => (await info())?.tr, 15000);
+      check(Boolean(tr), `網頁字幕也有譯文（${tr?.slice(0, 30) ?? '沒有'}）`);
+    }
   }
 
   let last = '';
@@ -386,6 +448,7 @@ try {
     if (!buttonsChecked && elapsed >= duration * 0.45) {
       buttonsChecked = true;
       await checkPanelButtons(state.recId);
+      await checkOverlay();
     }
     if (opt.bilingual === 'toggle' && !toggledOn && elapsed >= duration / 3) {
       log('在側邊欄打開雙語字幕');
@@ -439,6 +502,8 @@ try {
   const contexts = await cdp('Target.getTargets');
   const offscreenLeft = contexts.targetInfos.some((t) => t.url.endsWith('/offscreen.html'));
   check(!offscreenLeft, '停止後錄音頁已關閉');
+  const overlayLeft = await evaluate(page.sessionId, `Boolean(document.querySelector('tab-transcriber-caption'))`);
+  check(!overlayLeft, '停止後網頁字幕拿掉了');
 
   // README 的換語言流程：圖示點過的分頁，在側邊欄換語言後按「開始」要能直接錄。
   const other = opt.lang === 'ja' ? 'en' : 'ja';
