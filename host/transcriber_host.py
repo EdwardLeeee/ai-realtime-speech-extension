@@ -56,6 +56,16 @@ DEFAULT_CONFIG = {
     "translate_context": 1024,  # 一次只翻一兩句，不需要長 context
 }
 PROMPT_CHARS = 200  # 把上一段結尾當提示，讓跨段的句子接得上
+# Whisper 碰到配樂、歌聲這類幾乎沒人講話的段落，會卡在重複同一句（例如「ご視聴ありがとうございました」）直到產生上限，
+# 再換溫度重試五次，一段要轉 10 秒，即時字幕也跟著停住。所以依講話長度限制最多產生幾個 token：
+# 實測每秒講話泰文約 11 個、日文約 5 個、英文約 4 個，給到 25 個再加 20 個餘裕（docs/research/2026-10-tab-transcription.md 第 10 節）。
+# 算出來超過 CAP_LIMIT 就照原本的上限（448 減掉提示長度）；提示最長 227 個 token 時還剩 221 個，所以 200 以內一定放得下。
+TOKENS_PER_SPEECH_S = 25
+TOKENS_BASE = 20
+CAP_LIMIT = 200
+# 即時字幕少試幾個溫度：預設六個，每個都要再解碼五個候選，卡住時會拖慢每秒一次的更新；完全不重試的話泰文會卡在重複
+PARTIAL_TEMPERATURES = (0.0, 0.4, 0.8)
+PROMPT_RESET_TEMPERATURE = 0.5  # 要重試到這個溫度以上才轉得出來的結果不可靠，不拿來當下一段的提示（同 faster-whisper 段內的規則）
 # 放在提示最前面，示範要有標點與大小寫：large-v3-turbo 從句子中間開始聽時，不給這段會輸出全小寫、沒有標點
 # （docs/research/2026-10-tab-transcription.md）。
 # 泰文幾乎不用標點，加示範句也沒有變準（FLEURS 字元錯誤率 12.3% → 12.9%），所以不加。
@@ -130,26 +140,37 @@ def load_model(config, language):
     return model, name, "cpu"
 
 
-def transcribe(model, config, language, msg, prompt, beam_size=None):
+def transcribe(model, config, language, msg, prompt, partial=False):
+    """回傳 (段落, 講話秒數, 最高重試溫度)。"""
     import numpy as np
+    from faster_whisper.vad import get_speech_timestamps
 
     pcm = np.frombuffer(base64.b64decode(msg["pcm"]), dtype="<i2").astype(np.float32) / 32768.0
     offset = float(msg.get("offset", 0))
+    # 先量出有多少講話（和 transcribe 裡的 VAD 同一套設定）：沒有就不用轉，有的話依長度定產生上限。
+    speech_s = sum(s["end"] - s["start"] for s in get_speech_timestamps(pcm)) / SAMPLE_RATE
+    if not speech_s:
+        return [], 0.0, 0.0
+    cap = TOKENS_BASE + TOKENS_PER_SPEECH_S * speech_s
     segments, _info = model.transcribe(
         pcm,
         language=language,
-        beam_size=beam_size or config["beam_size"],
+        beam_size=config["partial_beam_size"] if partial else config["beam_size"],
+        **({"temperature": PARTIAL_TEMPERATURES} if partial else {}),
+        max_new_tokens=int(cap) if cap < CAP_LIMIT else None,
         vad_filter=True,
         initial_prompt=f"{STYLE_PROMPTS.get(language, '')} {prompt}".strip() or None,
     )
     out = []
+    temperature = 0.0
     for seg in segments:
+        temperature = max(temperature, seg.temperature)
         text = seg.text.strip()
         if text:
             out.append(
                 {"start": round(offset + seg.start, 2), "end": round(offset + seg.end, 2), "text": text}
             )
-    return out
+    return out, speech_s, temperature
 
 
 class Translator:
@@ -182,6 +203,7 @@ class Translator:
             if on == self.enabled:
                 return
             self.enabled = on
+            log.info("translator %s", "on" if on else "off")
             if not on:
                 self.generation += 1
                 self.finals.clear()
@@ -375,8 +397,11 @@ class Translator:
             with urllib.request.urlopen(req, timeout=60) as r:
                 return json.load(r)["choices"][0]["message"]["content"].strip()
         except Exception:
+            proc = self.proc
+            if proc is None:
+                return None  # 關掉雙語字幕或停止錄音時收掉了 server，翻到一半的這句本來就要丟掉
             log.exception("translate failed")
-            if self.proc and self.proc.poll() is not None:
+            if proc.poll() is not None:
                 self._stop_server()
                 self._give_up(f"翻譯模型意外結束，詳細原因在 {CACHE_DIR / 'llama-server.log'}。")
             return None
@@ -454,7 +479,7 @@ def run(model, config, language, translator, first):
             continue
         if kind == "partial":
             try:
-                segments = transcribe(model, config, language, msg, prompt, config["partial_beam_size"])
+                segments, _, _ = transcribe(model, config, language, msg, prompt, partial=True)
                 text = " ".join(s["text"] for s in segments)
             except Exception:
                 log.exception("partial failed id=%s", msg.get("id"))
@@ -466,20 +491,21 @@ def run(model, config, language, translator, first):
             continue
         started = time.perf_counter()
         try:
-            segments = transcribe(model, config, language, msg, prompt)
+            segments, speech_s, temperature = transcribe(model, config, language, msg, prompt)
         except Exception as exc:
             log.exception("transcribe failed id=%s", msg.get("id"))
             send({"type": "error", "id": msg.get("id"), "message": f"轉文字失敗：{exc}"})
             continue
         elapsed = time.perf_counter() - started
         audio_s = len(msg["pcm"]) * 3 / 4 / 2 / SAMPLE_RATE
-        log.info("chunk id=%s audio=%.1fs elapsed=%.2fs segments=%d",
-                 msg.get("id"), audio_s, elapsed, len(segments))
+        log.info("chunk id=%s audio=%.1fs speech=%.1fs elapsed=%.2fs segments=%d temperature=%.1f",
+                 msg.get("id"), audio_s, speech_s, elapsed, len(segments), temperature)
         send({"type": "segments", "id": msg.get("id"), "segments": segments,
               "elapsed": round(elapsed, 2)})
         translator.add_segments(segments)
         text = " ".join(s["text"] for s in segments)
-        if text:
+        # 重試到高溫才有的結果常是幻覺；拿來當提示的話，下一段會跟著重複同一句
+        if text and temperature <= PROMPT_RESET_TEMPERATURE:
             prompt = (prompt + " " + text)[-PROMPT_CHARS:]
 
 
