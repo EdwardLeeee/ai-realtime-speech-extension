@@ -58,7 +58,7 @@ const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(`<!doctype html><title>English Listening Practice</title>
 <h1>Listening</h1><audio id="a" controls preload="auto" src="/audio#t=${start},${start + duration}"></audio>
-<div id="player" style="width:480px;height:270px;background:#234"></div>`);
+<div id="player" draggable="true" style="width:480px;height:270px;background:#234"></div>`);
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const pageUrl = `http://127.0.0.1:${server.address().port}/`;
@@ -377,24 +377,33 @@ try {
     );
 
     // 拖右下角改大小：寬高跟著滑鼠變、左上角不動；按兩下恢復自動大小
-    const small = await info();
-    await mouse('mousePressed', ...small.grip);
-    for (let i = 1; i <= 5; i++) await mouse('mouseMoved', small.grip[0] + 40 * i, small.grip[1] + 16 * i);
-    await mouse('mouseReleased', small.grip[0] + 200, small.grip[1] + 80);
-    await sleep(300);
-    const big = await info();
+    const resizeBy = async (dx, dy) => {
+      const from = await info();
+      await mouse('mousePressed', ...from.grip);
+      for (let i = 1; i <= 5; i++) await mouse('mouseMoved', from.grip[0] + (dx * i) / 5, from.grip[1] + (dy * i) / 5);
+      await mouse('mouseReleased', from.grip[0] + dx, from.grip[1] + dy);
+      await sleep(300);
+      const to = await info();
+      const ok = to.sized && Math.abs(to.w - from.w - dx) < 3 && Math.abs(to.h - from.h - dy) < 3 &&
+        Math.abs(to.left - from.left) < 3 && Math.abs(to.top - from.top) < 3;
+      return { from, to, ok };
+    };
+    const resetSize = async () => {
+      const { grip } = await info();
+      await mouse('mousePressed', ...grip);
+      await mouse('mouseReleased', ...grip);
+      await mouse('mousePressed', ...grip, 2);
+      await mouse('mouseReleased', ...grip, 2);
+      await sleep(300);
+    };
+    const { from: small, to: big, ok: resized } = await resizeBy(200, 80);
     const size = (await evaluate(panel.sessionId, `chrome.storage.local.get('overlaySize')`)).overlaySize;
     check(
-      big.sized && Math.abs(big.w - small.w - 200) < 3 && Math.abs(big.h - small.h - 80) < 3 &&
-        Math.abs(big.left - small.left) < 3 && Math.abs(big.top - small.top) < 3 && Boolean(size),
+      resized && Boolean(size),
       `拖右下角可以改寬高，大小有存（寬 ${small.w.toFixed(0)}→${big.w.toFixed(0)}，高 ${small.h.toFixed(0)}→${big.h.toFixed(0)}）`,
     );
     await screenshot(ps, 'page-overlay-resized.png');
-    await mouse('mousePressed', ...big.grip);
-    await mouse('mouseReleased', ...big.grip);
-    await mouse('mousePressed', ...big.grip, 2);
-    await mouse('mouseReleased', ...big.grip, 2);
-    await sleep(300);
+    await resetSize();
     const reset = await info();
     const cleared = !(await evaluate(panel.sessionId, `chrome.storage.local.get('overlaySize')`)).overlaySize;
     check(!reset.sized && reset.h < big.h - 40 && cleared && (await evaluate(ps, `window.__clicks`)) === 0,
@@ -407,6 +416,27 @@ try {
     }, 3000);
     check(Boolean(full?.top), '全螢幕時字幕搬進播放器，在最上面，滑鼠點得到');
     await screenshot(ps, 'page-overlay-fullscreen.png');
+    // 播放器設了 draggable（和 YouTube 的影片區一樣）：縮小或按著框的邊緣拖時，按下去的那一點會離開框、落在播放器上，
+    // 瀏覽器不能因此開始拖播放器而中斷改大小、拖動（0.5.1 在全螢幕縮小字幕框只動了第一步）。
+    if (full) {
+      const grown = await resizeBy(200, 80);
+      const shrunk = await resizeBy(-120, -50);
+      check(
+        grown.ok && shrunk.ok,
+        `全螢幕時拖右下角可以放大也可以縮小（寬 ${grown.from.w.toFixed(0)}→${grown.to.w.toFixed(0)}→${shrunk.to.w.toFixed(0)}）`,
+      );
+      const edge = await info();
+      await mouse('mousePressed', edge.cx, edge.bottom - 3);
+      for (let i = 1; i <= 5; i++) await mouse('mouseMoved', edge.cx, edge.bottom - 3 - 30 * i);
+      await mouse('mouseReleased', edge.cx, edge.bottom - 153);
+      await sleep(300);
+      const lifted = await info();
+      check(
+        Math.abs(lifted.bottom - edge.bottom + 150) < 3 && Math.abs(lifted.cx - edge.cx) < 3,
+        `全螢幕時按著框的下緣往上拖也拖得動（移動 ${(lifted.bottom - edge.bottom).toFixed(0)}）`,
+      );
+      await resetSize();
+    }
     await evaluate(ps, `document.exitFullscreen()`);
     check(
       Boolean(await until(async () => { const i = await info(); return i?.parent === 'HTML' && i.open && i.top; }, 3000)),

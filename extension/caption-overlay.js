@@ -190,9 +190,14 @@
   }
 
   // 拖動：按住字幕框任何地方（×、右下角以外）移動。
+  // 拖動和改大小的 pointerdown 都要 preventDefault：滑鼠移動超過一點點時，瀏覽器會再看一次「按下去的那一點」底下是什麼，
+  // 框跟著滑鼠移開或縮小後那一點已經不在框上，底下若是可以拖的東西（YouTube 的影片區 .html5-video-container 設了
+  // draggable、一般的圖片和連結），瀏覽器就開始拖那個東西、送 pointercancel，拖動或改大小在第一步就停住。
+  // 全螢幕時影片佔滿畫面，縮小字幕框一定會碰到（2026-10 在 Brave 155、YouTube 實測）。
   let drag = null;
   box.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || e.composedPath().some((el) => el === close || el === grip)) return;
+    e.preventDefault();
     drag = { id: e.pointerId, x: e.clientX, y: e.clientY, start: { ...pos } };
     box.setPointerCapture(e.pointerId);
   });
@@ -216,6 +221,7 @@
   let resize = null;
   grip.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
+    e.preventDefault();
     const r = box.getBoundingClientRect();
     const em = parseFloat(getComputedStyle(box).fontSize);
     resize = { id: e.pointerId, x: e.clientX, y: e.clientY, left: r.left, top: r.top, w: r.width, h: r.height, em };
