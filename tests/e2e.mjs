@@ -546,6 +546,29 @@ try {
     // 顯示卡被別的程式佔住時（例如使用者自己的瀏覽器也在錄音），翻譯模型會改用 CPU，即時字幕就不翻。
     else log(`翻譯模型改用 ${translatorDevice || '?'}，不檢查即時字幕的譯文`);
   }
+  // 錄音中換頁：同網站整頁重新載入、換到別的網站（localhost 和 127.0.0.1 算不同網站），錄音都不中斷，字幕框在新頁面上自動出現。
+  // 聲音已經播完，換頁不影響後面的字數檢查。
+  {
+    const { recId } = (await getState()).state;
+    const ps = page.sessionId;
+    for (const [label, url] of [['同網站換頁', `${pageUrl}?next`], ['換到別的網站', pageUrl.replace('127.0.0.1', 'localhost')]]) {
+      await cdp('Page.navigate', { url }, ps);
+      const shown = await until(
+        () =>
+          evaluate(ps, `location.href === ${JSON.stringify(url)} && Boolean(document.querySelector('tab-transcriber-caption')?.matches(':popover-open'))`)
+            .catch(() => false),
+        8000,
+      );
+      const { state } = await getState();
+      check(shown && state.status === 'recording' && state.recId === recId, `${label}後錄音沒有中斷，字幕框在新頁面出現`);
+    }
+    // 換過網站後，停止再按側邊欄的「開始」要先再點一次圖示（點圖示拿到的 activeTab 換網站就失效）；錄音中點圖示不會重新開始。
+    await cdp('Target.activateTarget', { targetId: page.targetId });
+    await cdp('Extensions.triggerAction', { id, targetId: tabTarget.targetId });
+    await sleep(500);
+    check((await getState()).state.recId === recId, '換網站後再點圖示，還是同一次錄音');
+  }
+
   log('按側邊欄的「停止」');
   await evaluate(panel.sessionId, `document.getElementById('toggle').click()`);
   let final;

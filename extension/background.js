@@ -8,7 +8,9 @@
 //   chrome.storage.local.overlay     網頁字幕開關（預設開）；overlayPos、overlaySize 是網頁字幕的位置和使用者拖出來的大小，由 caption-overlay.js 存
 // 即時字幕（還沒講完的那一句）每秒更新，不寫 storage，直接用 runtime 訊息 { type: 'caption' } 推給側邊欄，
 // 它的譯文用 { type: 'caption-translation' }。
-// 網頁字幕（caption-overlay.js）注入在被錄的分頁裡，用 tabs.sendMessage 推上一句定稿和正在講的這一句。
+// 網頁字幕（caption-overlay.js）注入在被錄的分頁裡，用 tabs.sendMessage 推上一句定稿和正在講的這一句；
+// 分頁換頁（整頁重新載入）後原本的字幕框就不見了，載入完再注入一次。換頁不會讓分頁錄音結束（2026-10 Brave 155 實測，
+// 同網站、換網站、brave:// 頁都一樣），所以錄音照常，只要補字幕框。
 
 const HOST_NAME = 'com.tab_transcriber.host';
 const OFFSCREEN_URL = 'offscreen.html';
@@ -68,6 +70,13 @@ chrome.storage.session.get('state').then(async ({ state }) => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.bilingual) setTranslate(Boolean(changes.bilingual.newValue));
   if (area === 'local' && changes.overlay) setOverlay(changes.overlay.newValue !== false);
+});
+
+// 被錄的分頁載入完一頁就補上字幕框（字幕框自己會擋重複注入；YouTube 換影片這種不重新載入整頁的，字幕框本來就還在）。
+chrome.tabs.onUpdated.addListener(async (tabId, info) => {
+  if (rec?.tabId !== tabId || info.status !== 'complete' || rec.stopping) return;
+  const { overlay = true } = await chrome.storage.local.get('overlay');
+  if (overlay && rec?.tabId === tabId && !rec.stopping) injectOverlay();
 });
 
 chrome.action.onClicked.addListener((tab) => {
@@ -173,10 +182,10 @@ function stop() {
 function onCaptureDone(reason) {
   if (!rec) return;
   if (!rec.stopping) {
-    // 不是使用者按停止：分頁關掉或換頁了。
+    // 不是使用者按停止：分頁關掉了（換頁不會）。
     rec.stopping = true;
     stopTimer = setTimeout(() => finish('最後幾段等太久沒有轉完，已略過。'), STOP_TIMEOUT_MS);
-    setState({ status: 'stopping', message: reason === 'ended' ? '分頁已關閉或換頁，錄音已停止。' : '' });
+    setState({ status: 'stopping', message: reason === 'ended' ? '分頁已關閉，錄音已停止。' : '' });
   }
   rec.captureDone = true;
   // 錄音頁的最後一段已經比 'stopped' 先送進本機程式，所以 flush 一定排在所有定稿後面。
@@ -231,18 +240,21 @@ function sendCaptionTranslation(tr) {
   pushOverlay();
 }
 
-// 網頁字幕：錄音中打開就注入分頁（點過圖示的分頁有 activeTab，不用另外要網站權限），關掉就請它移除自己。
+// 網頁字幕：錄音中打開就注入分頁，關掉就請它移除自己。
 async function setOverlay(on) {
   if (!rec || rec.overlay === on) return;
+  if (on) return injectOverlay();
+  rec.overlay = false;
+  removeOverlay(rec.tabId);
+}
+
+// 點圖示拿到的 activeTab 換到別的網站就失效，所以 manifest 要了所有網站的權限，換網站後也能注入。
+async function injectOverlay() {
   const { tabId } = rec;
-  if (!on) {
-    rec.overlay = false;
-    removeOverlay(tabId);
-    return;
-  }
   try {
     await chrome.scripting.executeScript({ target: { tabId }, files: ['caption-overlay.js'] });
   } catch (err) {
+    // brave:// 這類內部頁面不能注入；回到一般網頁、載入完時會再注入。
     console.warn('網頁字幕注入失敗', err);
     return;
   }
