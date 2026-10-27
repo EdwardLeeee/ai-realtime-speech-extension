@@ -344,7 +344,8 @@ try {
           if (!host) return null;
           const r = host.shadowRoot.querySelector('.box').getBoundingClientRect();
           const c = host.shadowRoot.querySelector('.close').getBoundingClientRect();
-          const g = host.shadowRoot.querySelector('.resize').getBoundingClientRect();
+          const g = host.shadowRoot.querySelector('.resize.se').getBoundingClientRect();
+          const nw = host.shadowRoot.querySelector('.resize.nw').getBoundingClientRect();
           return {
             open: host.matches(':popover-open'),
             parent: host.parentNode.id || host.parentNode.tagName,
@@ -354,6 +355,7 @@ try {
             cx: r.left + r.width / 2, cy: r.top + r.height / 2, bottom: r.bottom,
             close: [c.left + c.width / 2, c.top + c.height / 2],
             grip: [g.left + g.width / 2, g.top + g.height / 2],
+            nw: [nw.left + nw.width / 2, nw.top + nw.height / 2],
             left: r.left, top: r.top, w: r.width, h: r.height,
             sized: host.shadowRoot.querySelector('.box').classList.contains('sized'),
           };
@@ -419,6 +421,22 @@ try {
     const cleared = !(await evaluate(panel.sessionId, `chrome.storage.local.get('overlaySize')`)).overlaySize;
     check(!reset.sized && reset.h < big.h - 40 && cleared && (await evaluate(ps, `window.__clicks`)) === 0,
       `右下角按兩下恢復自動大小（高 ${reset.h.toFixed(0)}）`);
+
+    // 拖左上角：往左上拉大，右下角不動
+    {
+      const from = await info();
+      await mouse('mousePressed', ...from.nw);
+      for (let i = 1; i <= 5; i++) await mouse('mouseMoved', from.nw[0] - 20 * i, from.nw[1] - 12 * i);
+      await mouse('mouseReleased', from.nw[0] - 100, from.nw[1] - 60);
+      await sleep(300);
+      const to = await info();
+      check(
+        to.sized && Math.abs(to.w - from.w - 100) < 3 && Math.abs(to.h - from.h - 60) < 3 &&
+          Math.abs(to.left + to.w - from.left - from.w) < 3 && Math.abs(to.top + to.h - from.top - from.h) < 3,
+        `拖左上角也能改寬高，右下角不動（寬 ${from.w.toFixed(0)}→${to.w.toFixed(0)}，高 ${from.h.toFixed(0)}→${to.h.toFixed(0)}）`,
+      );
+      await resetSize();
+    }
 
     await evaluate(ps, `document.getElementById('player').requestFullscreen()`);
     const full = await until(async () => {
