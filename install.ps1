@@ -4,6 +4,12 @@
 # Windows PowerShell 5.1 讀沒有 BOM 的 .ps1 會當成系統字碼頁，所以這個檔案存成 UTF-8 加 BOM。
 param([switch]$NoTranslate)
 $ErrorActionPreference = 'Stop'
+if ($PSVersionTable.PSEdition -eq 'Desktop') {
+  # 從 PowerShell 7（例如 Windows 終端機）啟動時會帶著它的 PSModulePath，Windows PowerShell 5.1 就找不到
+  # Get-FileHash、Expand-Archive 這些內建指令（GitHub Actions 實測），所以換回 5.1 自己的模組路徑。
+  $env:PSModulePath = @("$HOME\Documents\WindowsPowerShell\Modules",
+    [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')) -join ';'
+}
 
 $Root = $PSScriptRoot
 $HostName = 'com.tab_transcriber.host'
