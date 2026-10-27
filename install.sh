@@ -43,9 +43,11 @@ done
 
 command -v uv >/dev/null || { echo "需要先安裝 uv：https://docs.astral.sh/uv/" >&2; exit 1; }
 
-# macOS 沒有 sha256sum，用 shasum
+# 直接比雜湊值：macOS 的 sha256sum 是 BSD 版，不支援 GNU 的 -c --status
 sha_ok() {
-  if command -v sha256sum >/dev/null; then echo "$1  $2" | sha256sum -c --status; else echo "$1  $2" | shasum -a 256 -c --status; fi
+  local out
+  out=$( (command -v shasum >/dev/null && shasum -a 256 "$2") || sha256sum "$2" ) || return 1
+  [ "${out%% *}" = "$1" ]
 }
 
 # 下載到 .part，核對 SHA-256 才改成正式檔名；已經有而且核對正確就跳過。
