@@ -137,6 +137,7 @@ host/        本機轉文字程式（native messaging host，Python + faster-whi
   vendor/llama.cpp/  install.sh 下載的 llama.cpp（Vulkan 版），雙語字幕用它的 llama-server 跑翻譯模型，不進 git
 tests/e2e.mjs  端到端測試：headless Brave 載入插件、播錄音、模擬點圖示、檢查文字稿與雙語字幕
 tests/test_repeats.py  本機程式縮短重複、判斷狀聲詞的單元測試（不需要模型）
+tests/test_chunking.mjs  錄音頁切段的單元測試：背景一直有聲音時也要在句子停頓處切（不需要瀏覽器和模型）
 docs/research/ 選型筆記與速度量測
 ```
 
@@ -148,6 +149,7 @@ node tests/e2e.mjs --audio $C/alice-one-syllable-ch02.mp3 --start 60 --duration 
 node tests/e2e.mjs --audio $C/gongitsune-01.mp3 --start 60 --duration 40 --lang ja --bilingual on
 node tests/e2e.mjs --audio $C/fleurs-th-dev.mp3 --start 0 --duration 84 --lang th --bilingual on
 host/.venv/bin/python -m unittest tests/test_repeats.py
+node tests/test_chunking.mjs
 ```
 
 插件 ID 固定為 `pclblnfmncjbohcnbhlkgefpdhpljiae`（由 `manifest.json` 的 `key` 決定），`install.sh` 的登記檔只允許這個 ID 連線。

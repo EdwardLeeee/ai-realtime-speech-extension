@@ -8,6 +8,10 @@ const MAX_CHUNK_BLOCKS = 250; // 最長 25 秒，到了就在最後 3 秒內最�
 const GAP_BLOCKS = 4; // 連續 0.4 秒安靜算一個停頓
 const LEAD_BLOCKS = 5; // 還沒出聲前最多保留 0.5 秒
 const MIN_VOICED_BLOCKS = 3; // 有聲音不到 0.3 秒的段落不送
+// 遊戲、觀眾、配樂一直有聲音時永遠等不到絕對的安靜，每段都拖到 25 秒才切。所以也拿最近 10 秒最安靜的一成當背景音量，
+// 比它大 1.5 倍才算有人聲（模擬背景聲比講話小 10 dB 到大 3 dB：一段從 23 秒回到約 7 秒，送出的講話一樣多；研究筆記第 13 節）
+const FLOOR_BLOCKS = 100;
+const FLOOR_RATIO = 1.5;
 const LEVEL_EVERY = 5; // 每 0.5 秒回報一次音量給側邊欄
 const PARTIAL_EVERY_BLOCKS = 10; // 這一句還沒講完時，每 1 秒把目前聽到的部分送去轉，當即時字幕
 
@@ -56,6 +60,7 @@ async function startCapture(streamId) {
     blocks: [], // 這一段還沒送出的聲音
     loud: [], // 每塊是否有人聲
     rms: [],
+    recent: [], // 最近 FLOOR_BLOCKS 塊的音量，估背景聲
     startBlock: 0, // 這一段第一塊是從錄音開始算的第幾塊
     silentRun: 0,
     speech: 0.05, // 講話音量的移動平均，用來決定「安靜」的門檻
@@ -74,7 +79,10 @@ function onBlock(c, samples) {
   let sum = 0;
   for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
   const rms = Math.sqrt(sum / samples.length);
-  const loud = rms > Math.max(0.003, c.speech * 0.12);
+  c.recent.push(rms);
+  if (c.recent.length > FLOOR_BLOCKS) c.recent.shift();
+  const floor = [...c.recent].sort((a, b) => a - b)[Math.floor(c.recent.length / 10)];
+  const loud = rms > Math.max(0.003, c.speech * 0.12, floor * FLOOR_RATIO);
   if (loud) c.speech = c.speech * 0.95 + rms * 0.05;
 
   c.blocks.push(samples);

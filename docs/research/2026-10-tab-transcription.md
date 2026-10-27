@@ -504,6 +504,50 @@ Whisper 碰到配樂或歌聲時，常會一直重複同一句，直到產生上
   - 快捷鍵：使用者沒有選。
 - 驗證：e2e（英文 60 秒、雙語切換）加了兩項換頁檢查，錄音中先同網站換頁、再換到別的網站（127.0.0.1 → localhost），兩次都確認錄音沒有中斷、字幕框出現在新頁面；之後點圖示仍是同一次錄音。0.6.0 全部 45 項通過。把重新注入的監聽拿掉再跑，只有這兩項換頁檢查失敗。
 
+## 13. 追加：YouTube 原文字幕、背景聲很大時字幕慢（2026-10-28）
+
+使用者：「yt有辦法抓原文cc字幕然後輸出雙字幕嗎」，以及「cs2 英語台的直播讀的好像有點慢也有點不准」（Twitch 的 PGL 台）。
+
+### YouTube 原文字幕
+
+量法：`yt_captions_probe.mjs`，Brave 155 headless，兩部有人工字幕的影片（dQw4w9WgXcQ、jNQXAC9IVRw）。
+
+| 做法 | 結果 |
+|---|---|
+| 播放器回應裡的字幕清單 | 拿得到：人工字幕和自動字幕分開列；可以翻成 156 種語言，包括 zh-Hant |
+| 直接抓清單裡的字幕網址（content script） | 200，內容是空的。網址都帶 `exp=xpe` |
+| 打開 CC，看播放器自己發的請求 | 網址多了 `pot`（124 字元）和 `c=WEB`；headless 裡內容也是空的，畫面上沒有字幕 |
+| 拿播放器的網址重抓原文、加 `tlang=zh-Hant` | 都是空的 |
+| 逐字稿面板 | 元素在 |
+
+- headless 裡播放器自己也拿不到字幕，應該是 YouTube 擋了 headless。改 user agent 繞過偵測的做法沒有做，所以「在真的 Brave 裡跟著播放器拿整份字幕」還沒驗證。
+- 官方 Data API 不能用：captions.download「requires the user to have permission to edit the video」。
+- YouTube 服務條款禁止未經授權「存取、重製、下載」內容。插件只讀使用者自己畫面上播放器已經顯示的字幕，是個人使用；整份下載比較接近條款禁止的範圍。
+- 社群回報（未經官方確認）：字幕網址沒有 YouTube BotGuard 產生的 PO token（`pot`）時回空白；見 youtube-transcript-api issue #592。
+- 可行的兩種做法，都還沒做：
+  - 讀畫面上正在顯示的 CC（`.ytp-caption-segment`），用現有的翻譯模型翻成雙語。最簡單；CC 要打開，自動字幕會一個字一個字冒出來。
+  - 在頁面裡攔播放器自己抓到的整份字幕，翻譯用 YouTube 的 `tlang`。拿得到整份和時間；比較容易被 YouTube 改版弄壞，也還沒驗證。
+
+### 背景聲很大時字幕慢
+
+- 錄音頁在連續 0.4 秒「安靜」時切段，安靜的門檻是講話音量移動平均的 12%。比賽轉播一直有遊戲聲和觀眾聲，永遠等不到這種安靜，每段都拖到最長 25 秒才切，所以定稿要 25 秒以上才出來。
+- host.log 裡 10-26 一次英文錄音（背景一直有聲音）：28 段中 18 段在 22–25 秒，乾淨講話的錄音中位數約 7 秒。
+- 量法：`bench_noise_cut.py`，只用 CPU，照 offscreen.js 的規則模擬。講話用 alice 120 秒，背景是粉紅雜訊或「觀眾」（四段日文朗讀疊起來加起伏的雜訊）。
+
+| 背景 | 現在：段落中位數 | 改後：段落中位數 | 改後：切在停頓 | 送出的講話（現在 → 改後） |
+|---|---|---|---|---|
+| 沒有 | 7.9 秒 | 7.9 秒 | 13/13 | 96% → 96% |
+| 粉紅雜訊，比講話小 10 dB | 23.6 秒 | 8.8 秒 | 13/13 | 98% → 96% |
+| 粉紅雜訊，比講話大 3 dB | 23.5 秒 | 6.3 秒 | 14/17 | 98% → 96% |
+| 觀眾，比講話小 10 dB | 22.8 秒 | 7.2 秒 | 12/13 | 93% → 97% |
+| 觀眾，比講話大 3 dB | 23.9 秒 | 7.8 秒 | 10/14 | 81% → 98% |
+
+- 改法：另外估背景音量，取最近 10 秒每 0.1 秒音量中最安靜的一成；比它大 1.5 倍才算有人聲。1.3 倍切出來的段落比較長，所以用 1.5。
+- 準不準和 VAD 無關：同樣的混音，Silero VAD 量到的講話都是 100%，沒有把講話當成雜訊丟掉。
+- 驗證：
+  - `tests/test_chunking.mjs` 把合成的句子（加不同大小的背景雜訊）餵給真的 offscreen.js，0.6.1 全部通過。改回舊規則時，兩種有背景聲的情況都失敗（段落中位數 24.1、23.5 秒）。
+  - e2e（英文 60 秒、雙語切換）45 項全部通過，乾淨講話的切段不受影響。
+
 ## 附錄
 
 ### 量測工具與重現
@@ -518,6 +562,8 @@ host/.venv/bin/python docs/research/tab-transcription/bench_partial.py <音檔> 
 node tests/e2e.mjs --audio <英文音檔> --start 60 --duration 75 --shots /tmp/shots
 node docs/research/tab-transcription/nav_probe.mjs              # 第 12 節，只有點圖示的權限
 node docs/research/tab-transcription/nav_probe.mjs --all-urls   # 加所有網站權限
+node docs/research/tab-transcription/yt_captions_probe.mjs dQw4w9WgXcQ jNQXAC9IVRw   # 第 13 節
+CUDA_VISIBLE_DEVICES= host/.venv/bin/python -I docs/research/tab-transcription/bench_noise_cut.py   # 第 13 節，只用 CPU
 ```
 
 原始數據：`docs/research/tab-transcription/bench-results.jsonl`。
