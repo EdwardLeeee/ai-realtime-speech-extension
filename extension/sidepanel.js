@@ -12,6 +12,8 @@ let recordings = [];
 let language = 'en';
 let bilingual = false; // 雙語字幕開關：開著才顯示（和複製、下載）譯文
 let overlay = true; // 網頁字幕開關：錄音時在被錄的網頁上浮著即時字幕
+let hints = {}; // 各語言的專有名詞 { en: 'donk, MOUZ' }
+let hintsTimer = null;
 let textSize = DEFAULT_TEXT_SIZE;
 let caption = null; // 還沒講完那一句的即時字幕 { recId, id, offset, text }
 let captionTr = null; // 即時字幕的譯文 { recId, id, text }
@@ -24,8 +26,9 @@ async function load() {
     language = 'en',
     bilingual = false,
     overlay = true,
+    hints = {},
     textSize = DEFAULT_TEXT_SIZE,
-  } = await chrome.storage.local.get(['recordings', 'language', 'bilingual', 'overlay', 'textSize']));
+  } = await chrome.storage.local.get(['recordings', 'language', 'bilingual', 'overlay', 'hints', 'textSize']));
   render();
 }
 
@@ -35,6 +38,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.language) language = changes.language.newValue ?? 'en';
   if (area === 'local' && changes.bilingual) bilingual = Boolean(changes.bilingual.newValue);
   if (area === 'local' && changes.overlay) overlay = changes.overlay.newValue !== false;
+  if (area === 'local' && changes.hints) hints = changes.hints.newValue ?? {};
   if (area === 'local' && changes.textSize) textSize = changes.textSize.newValue ?? DEFAULT_TEXT_SIZE;
   render();
 });
@@ -128,6 +132,8 @@ function render() {
 
   $('language').value = active ? state.language ?? language : language;
   $('language').disabled = active;
+  // 顯示目前語言（錄音中是正在錄的語言）的專有名詞；正在打字時不蓋掉
+  if (document.activeElement !== $('hints')) $('hints').value = hints[$('language').value] ?? '';
   $('bilingual').checked = bilingual;
   $('overlay').checked = overlay;
   $('bilingual-hint').textContent = translatorHint();
@@ -234,6 +240,12 @@ $('language').addEventListener('change', (e) => chrome.storage.local.set({ langu
 $('bilingual').addEventListener('change', (e) => chrome.storage.local.set({ bilingual: e.target.checked }));
 // 網頁字幕也一樣：背景程式在錄音中的分頁加上或拿掉字幕；字幕右上角的 × 也是把這個開關關掉。
 $('overlay').addEventListener('change', (e) => chrome.storage.local.set({ overlay: e.target.checked }));
+// 專有名詞：停止打字 0.6 秒後存；錄音中背景程式會把新的名單交給本機程式，下一句就生效。
+$('hints').addEventListener('input', (e) => {
+  clearTimeout(hintsTimer);
+  const lang = $('language').value;
+  hintsTimer = setTimeout(() => chrome.storage.local.set({ hints: { ...hints, [lang]: e.target.value.trim() } }), 600);
+});
 
 $('toggle').addEventListener('click', async () => {
   if (ACTIVE.includes(state.status)) {

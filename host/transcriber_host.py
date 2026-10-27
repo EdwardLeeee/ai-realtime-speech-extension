@@ -5,10 +5,11 @@
 瀏覽器在插件連線時啟動這支程式，斷線就結束，所以平常不佔記憶體。
 
 訊息格式：每則前面 4 位元組 little-endian 長度，後面接 UTF-8 JSON。
-  收  {"type": "start", "language": "en" | "ja" | "th", "translate": false}（連線後第一則，決定載入哪個模型）
+  收  {"type": "start", "language": "en" | "ja" | "th", "translate": false, "hints": "donk, MOUZ"}（連線後第一則，決定載入哪個模型）
       {"type": "audio", "id": 3, "offset": 12.5, "pcm": "<base64，int16 LE 單聲道 16 kHz>"}（講完的一句，定稿）
       {"type": "partial", "id": 4, "offset": 20.1, "pcm": "..."}（還沒講完的一句，即時字幕）
       {"type": "translate", "enabled": true}（錄音中打開或關掉雙語字幕）
+      {"type": "hints", "text": "..."}（錄音中改了專有名詞）
       {"type": "flush"}（錄音停了：手上還沒翻的句子翻完後回 flushed）
   送  {"type": "status", "state": "loading" | "ready", "model": ..., "device": ..., "language": ...}
       {"type": "segments", "id": 3, "segments": [{"start": 12.9, "end": 15.1, "text": "..."}], "elapsed": 1.2}
@@ -66,6 +67,10 @@ DEFAULT_CONFIG = {
     "translate_context": 1024,  # 一次只翻一兩句，不需要長 context
 }
 PROMPT_CHARS = 200  # 把上一段結尾當提示，讓跨段的句子接得上
+PROMPT_TOKENS = 222  # faster-whisper 的提示只留最後 223 個 token（前面多的砍掉）；留一個給它加在最前面的空白
+# 側邊欄填的專有名詞（人名、隊名、武器名…）放在提示最前面，最多佔這麼多 token（約 30 個英文名字）。
+# Twitch PGL 英文轉播 4 分鐘：加了兩隊的選手、隊名、武器名，turbo 轉對的名字從 3 處變 15 處，large-v3 從 4 處變 24 處（研究筆記第 13 節）。
+HINT_TOKENS = 120
 # Whisper 碰到配樂、歌聲這類幾乎沒人講話的段落，會卡在重複同一句（例如「ご視聴ありがとうございました」）直到產生上限，
 # 再換溫度重試五次，一段要轉 10 秒，即時字幕也跟著停住。所以依講話長度限制最多產生幾個 token：
 # 實測每秒講話泰文約 11 個、日文約 5 個、英文約 4 個，給到 25 個再加 20 個餘裕（docs/research/2026-10-tab-transcription.md 第 10 節）。
@@ -167,7 +172,26 @@ def load_model(config, language):
     return model, name, "cpu"
 
 
-def transcribe(model, config, language, msg, prompt, partial=False):
+def clip_hints(model, text):
+    """側邊欄填的專有名詞：空白壓成一個，太長的話只留前面 HINT_TOKENS 個 token。"""
+    text = " ".join(str(text or "").split())
+    ids = model.hf_tokenizer.encode(text, add_special_tokens=False).ids
+    return model.hf_tokenizer.decode(ids[:HINT_TOKENS]) if len(ids) > HINT_TOKENS else text
+
+
+def build_prompt(model, language, prompt, hints):
+    style = STYLE_PROMPTS.get(language, "")
+    if not hints:
+        return f"{style} {prompt}".strip() or None
+    # 提示太長時會從前面砍，專有名詞就不見了；所以改成縮短後面接的上一段結尾。
+    head = f"{hints} {style}".strip()
+    budget = PROMPT_TOKENS - len(model.hf_tokenizer.encode(f" {head} ", add_special_tokens=False).ids)
+    ids = model.hf_tokenizer.encode(prompt, add_special_tokens=False).ids
+    tail = model.hf_tokenizer.decode(ids[-budget:]) if budget > 0 and ids else ""
+    return f"{head} {tail}".strip()
+
+
+def transcribe(model, config, language, msg, prompt, partial=False, hints=""):
     """回傳 (段落, 講話秒數, 最高重試溫度, 是否當成狀聲詞沒有重試)。"""
     import numpy as np
     from faster_whisper.vad import get_speech_timestamps
@@ -184,7 +208,7 @@ def transcribe(model, config, language, msg, prompt, partial=False):
         beam_size=config["partial_beam_size"] if partial else config["beam_size"],
         max_new_tokens=int(cap) if cap < CAP_LIMIT else None,
         vad_filter=True,
-        initial_prompt=f"{STYLE_PROMPTS.get(language, '')} {prompt}".strip() or None,
+        initial_prompt=build_prompt(model, language, prompt, hints),
     )
     temperatures = PARTIAL_TEMPERATURES if partial else FINAL_TEMPERATURES
     segments = list(model.transcribe(pcm, temperature=temperatures[0], **options)[0])
@@ -604,8 +628,14 @@ def main():
 
 def run(model, config, language, translator, first):
     prompt = ""
+    hints = clip_hints(model, first.get("hints")) if first.get("type") == "start" else ""
+    log.info("hints chars=%d", len(hints))  # 只記長度，不記內容
     for msg in incoming(first):
         kind = msg.get("type")
+        if kind == "hints":  # 錄音中改了側邊欄的專有名詞
+            hints = clip_hints(model, msg.get("text"))
+            log.info("hints chars=%d", len(hints))
+            continue
         if kind == "translate":
             translator.set_enabled(bool(msg.get("enabled")))
             continue
@@ -614,7 +644,7 @@ def run(model, config, language, translator, first):
             continue
         if kind == "partial":
             try:
-                segments, _, _, _ = transcribe(model, config, language, msg, prompt, partial=True)
+                segments, _, _, _ = transcribe(model, config, language, msg, prompt, partial=True, hints=hints)
                 text = collapse_repeats(" ".join(s["text"] for s in segments))
             except Exception:
                 log.exception("partial failed id=%s", msg.get("id"))
@@ -626,7 +656,7 @@ def run(model, config, language, translator, first):
             continue
         started = time.perf_counter()
         try:
-            segments, speech_s, temperature, vocal = transcribe(model, config, language, msg, prompt)
+            segments, speech_s, temperature, vocal = transcribe(model, config, language, msg, prompt, hints=hints)
         except Exception as exc:
             log.exception("transcribe failed id=%s", msg.get("id"))
             send({"type": "error", "id": msg.get("id"), "message": f"轉文字失敗：{exc}"})

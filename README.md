@@ -77,6 +77,13 @@ Notes:
 - In videos with a lot of music or singing and little speech, Whisper sometimes produces sentences nobody said; in Japanese a common one is "ご視聴ありがとうございました". This is a known Whisper problem. The program limits how long such output can get: a segment with only a second or two of speech used to stall for about 10 seconds and now takes about 2; segments with more speech can still stall for 4–5 seconds. The phantom sentences can still appear.
 - Continuous interjections, backchannels or laughter (e.g. repeated "うん、うん" or "ううう") are written out literally by Whisper. Runs repeated 4 or more times are shortened to 3 plus "…" (e.g. "うん。 うん。 うん。…"), and such repetition no longer triggers re-transcription at six temperatures (which used to stall a segment, and the captions, for 8–16 seconds).
 
+## Proper nouns
+
+- Put names Whisper keeps getting wrong (people, teams, terms) into the "專有名詞" (proper nouns) field in the side panel, separated by commas, e.g. `donk, MOUZ, torzsi, Five-SeveN`, and Whisper will spell them that way.
+- The list is remembered separately for each language. Changing it while recording applies from the next sentence.
+- Measured on 4 minutes of an English Twitch PGL broadcast: with both teams' players, team names and weapon names filled in, large-v3-turbo got the names right in 15 places instead of 3; `large-v3` with the list got all 24 right (see [Changing models](#changing-models); large-v3 can't be used together with bilingual captions).
+- Up to about 30 English names; anything beyond that is ignored.
+
 ## On-page captions
 
 - While the "網頁字幕" (on-page captions) switch in the side panel is on (the default), a caption box floats over the page being recorded: the dimmer line on top is the previous sentence, the one below is the sentence being spoken. With bilingual captions on, each sentence has its Chinese translation underneath.
@@ -159,6 +166,7 @@ host/        Local speech-to-text program (native messaging host, Python + faste
   vendor/llama.cpp/  llama.cpp (Vulkan build) downloaded by install.sh; runs the translation model via llama-server; not in git
 tests/e2e.mjs  End-to-end test: headless Brave loads the extension, plays audio, simulates the icon click, checks transcript and bilingual captions
 tests/test_repeats.py  Unit tests for shortening repeats and detecting interjections in the local program (no model needed)
+tests/test_hints.py  Rules for putting proper nouns into the Whisper prompt (tokenizer only)
 tests/test_chunking.mjs  Unit test for where the recorder splits audio, including with constant background sound (no browser or model needed)
 tests/test_native_host.py  Starts the local program from its registration like a browser would and exchanges messages (Linux and Windows; GitHub Actions runs it on Windows)
 docs/research/ Research notes and measurements (in Chinese)
@@ -172,6 +180,7 @@ node tests/e2e.mjs --audio $C/alice-one-syllable-ch02.mp3 --start 60 --duration 
 node tests/e2e.mjs --audio $C/gongitsune-01.mp3 --start 60 --duration 40 --lang ja --bilingual on
 node tests/e2e.mjs --audio $C/fleurs-th-dev.mp3 --start 0 --duration 84 --lang th --bilingual on
 host/.venv/bin/python -m unittest tests/test_repeats.py
+host/.venv/bin/python -m unittest tests/test_hints.py
 node tests/test_chunking.mjs
 host/.venv/bin/python tests/test_native_host.py   # Windows: host\.venv\Scripts\python.exe tests\test_native_host.py
 ```

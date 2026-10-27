@@ -241,7 +241,7 @@ try {
   const panel = await openTab(`chrome-extension://${id}/sidepanel.html`);
   await evaluate(
     panel.sessionId,
-    `chrome.storage.local.set({ language: ${JSON.stringify(opt.lang)}, bilingual: ${opt.bilingual === 'on'} })`,
+    `chrome.storage.local.set({ language: ${JSON.stringify(opt.lang)}, bilingual: ${opt.bilingual === 'on'}, hints: { ${opt.lang}: 'Alice, Dinah' } })`,
   );
   // 記錄即時字幕每次變化、第一句定稿出現的時間（相對於點圖示）。
   await evaluate(
@@ -260,6 +260,17 @@ try {
       }).observe(document.getElementById('transcript'), { childList: true, subtree: true, characterData: true });
     })()`,
   );
+  // 本機程式在 host.log 記專有名詞的長度：從現在的檔尾往後找這次測試的紀錄
+  const hostLog = path.join(os.homedir(), '.cache', 'tab-transcriber', 'host.log');
+  const logStart = fs.existsSync(hostLog) ? fs.statSync(hostLog).size : 0;
+  const hintsLogged = (chars) => {
+    if (!fs.existsSync(hostLog)) return false;
+    const fd = fs.openSync(hostLog, 'r');
+    const buf = Buffer.alloc(Math.max(0, fs.statSync(hostLog).size - logStart));
+    fs.readSync(fd, buf, 0, buf.length, logStart);
+    fs.closeSync(fd);
+    return buf.toString('utf8').includes(`hints chars=${chars}`);
+  };
   // triggerAction 實際作用在視窗目前顯示的分頁，所以先切回測試網頁。
   await cdp('Target.activateTarget', { targetId: page.targetId });
   await cdp('Extensions.triggerAction', { id, targetId: tabTarget.targetId });
@@ -472,6 +483,7 @@ try {
   const deadline = recStart + (duration + 5) * 1000;
   let shotTaken = false;
   let buttonsChecked = false;
+  let hintsChecked = false;
   const clickBilingual = () => evaluate(panel.sessionId, `document.getElementById('bilingual').click()`);
   while (Date.now() < deadline) {
     await sleep(3000);
@@ -502,6 +514,13 @@ try {
         const { data } = await cdp('Page.captureScreenshot', { format: 'png' }, panel.sessionId);
         fs.writeFileSync(path.join(opt.shots, `panel-recording-${scheme}.png`), Buffer.from(data, 'base64'));
       }
+    }
+    if (!hintsChecked && state.status === 'recording') {
+      hintsChecked = true;
+      check(await waitFor(() => hintsLogged(12), 5000), '開始時把側邊欄的專有名詞交給本機程式');
+      // 錄音中在側邊欄改專有名詞（照使用者打字的方式，停 0.6 秒後才存）
+      await evaluate(panel.sessionId, `(() => { const el = document.getElementById('hints'); el.value = 'Alice, Dinah, the Cheshire Cat'; el.dispatchEvent(new Event('input')); })()`);
+      check(await waitFor(() => hintsLogged(30), 5000), '錄音中改了專有名詞，馬上交給本機程式');
     }
     if (!buttonsChecked && elapsed >= duration * 0.45) {
       buttonsChecked = true;

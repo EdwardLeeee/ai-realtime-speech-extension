@@ -5,6 +5,7 @@
 //   chrome.storage.local.recordings  文字稿 [{ id, title, url, language, startedAt, segments: [{ start, end, text, translation? }] }]
 //   chrome.storage.local.language    側邊欄選的語言（en | ja | th），下次開始錄音時生效
 //   chrome.storage.local.bilingual   雙語字幕開關；錄音中切換會馬上通知本機程式啟動或關掉翻譯模型
+//   chrome.storage.local.hints       各語言的專有名詞 { en: 'donk, MOUZ', ja: '…' }，放在 Whisper 提示最前面；錄音中改了馬上通知本機程式
 //   chrome.storage.local.overlay     網頁字幕開關（預設開）；overlayPos、overlaySize 是網頁字幕的位置和使用者拖出來的大小，由 caption-overlay.js 存
 // 即時字幕（還沒講完的那一句）每秒更新，不寫 storage，直接用 runtime 訊息 { type: 'caption' } 推給側邊欄，
 // 它的譯文用 { type: 'caption-translation' }。
@@ -70,6 +71,9 @@ chrome.storage.session.get('state').then(async ({ state }) => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.bilingual) setTranslate(Boolean(changes.bilingual.newValue));
   if (area === 'local' && changes.overlay) setOverlay(changes.overlay.newValue !== false);
+  if (area === 'local' && changes.hints && rec && port && !rec.stopping) {
+    port.postMessage({ type: 'hints', text: changes.hints.newValue?.[rec.language] ?? '' });
+  }
 });
 
 // 被錄的分頁載入完一頁就補上字幕框（字幕框自己會擋重複注入；YouTube 換影片這種不重新載入整頁的，字幕框本來就還在）。
@@ -134,12 +138,14 @@ async function start(tab) {
     lastFinalId: 0,
     partialInFlight: false,
     queuedPartial: null,
+    language: 'en',
     translate: false,
     flushPending: false,
     overlay: false, // 網頁字幕已經注入分頁
     lines: { prev: null, live: null }, // 網頁字幕顯示的上一句定稿 { start, text, tr } 和即時字幕 { id, text, tr }
   };
   const { language = 'en' } = await chrome.storage.local.get('language');
+  rec.language = language;
   await setState({ ...IDLE, status: 'starting', tabId: tab.id, title: tab.title ?? '', recId: id, language });
   try {
     await ensureOffscreen();
@@ -147,9 +153,9 @@ async function start(tab) {
     // 拿到的 streamId 幾秒內沒用就失效，本機程式約 0.1 秒就會回第一則訊息，來得及。
     const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
     await connectHost();
-    const { bilingual = false } = await chrome.storage.local.get('bilingual');
+    const { bilingual = false, hints = {} } = await chrome.storage.local.get(['bilingual', 'hints']);
     rec.translate = bilingual;
-    port.postMessage({ type: 'start', language, translate: bilingual });
+    port.postMessage({ type: 'start', language, translate: bilingual, hints: hints[language] ?? '' });
     if (bilingual) setState({ translator: 'loading' });
     const reply = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'start', streamId });
     if (!reply?.ok) throw new Error(reply?.error ?? '無法開始錄音');

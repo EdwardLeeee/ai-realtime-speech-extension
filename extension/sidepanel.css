@@ -106,6 +106,22 @@ body {
 .hint { order: 1; flex-basis: 100%; color: var(--muted); font-size: 12px; }
 .hint:empty { display: none; }
 
+/* 專有名詞：自己一行，輸入框佔滿剩下的寬度 */
+.hints { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--muted); font-size: 12px; }
+.hints input {
+  flex: 1;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.hints input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 button,
 select {
   min-height: 32px;

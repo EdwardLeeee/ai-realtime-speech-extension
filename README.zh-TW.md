@@ -75,6 +75,13 @@ Brave／Chrome 插件。把分頁正在播放的英文、日文或泰文錄音�
 - 配樂或歌聲多、講話少的影片，偶爾會冒出沒人講的句子，日文常見的是「ご視聴ありがとうございました」。這是 Whisper 本身的毛病。程式已經限制這種句子的長度：講話只有一兩秒的段落，以前會卡住約 10 秒，現在約 2 秒；講話較多的段落仍可能卡住 4–5 秒。句子本身還是可能出現。
 - 連續的狀聲詞、附和或笑聲（例如一直「うん、うん」「ううう」），Whisper 會照實寫成一長串。程式會把連續重複 4 次以上的部分縮成 3 次加「…」（例如「うん。 うん。 うん。…」），也不再為了這種重複換六個溫度重轉（以前一段會卡 8–16 秒，字幕跟著停住）。
 
+## 專有名詞
+
+- 側邊欄的「專有名詞」欄位填常被轉錯的人名、隊名、術語，用逗號分開，例如 `donk, MOUZ, torzsi, Five-SeveN`，Whisper 就會照著拼。
+- 每種語言分開記住。錄音中改了，下一句就照新的名單。
+- 實測 Twitch PGL 的英文轉播 4 分鐘：填了兩隊的選手、隊名和武器名後，large-v3-turbo 轉對的名字從 3 處變 15 處；改用 `large-v3` 再加名單是 24 處全對（見下面「換模型」，large-v3 不能和雙語字幕一起開）。
+- 最多約 30 個英文名字，再多的部分會被忽略。
+
 ## 網頁字幕
 
 - 側邊欄的「網頁字幕」開關開著時（預設開），錄音中播放的網頁上會浮著一個字幕框：上面淡一點的是上一句，下面是正在講的這一句；雙語字幕開著時，各句下面加上中文。
@@ -157,6 +164,7 @@ host/        本機轉文字程式（native messaging host，Python + faster-whi
   vendor/llama.cpp/  install.sh 下載的 llama.cpp（Vulkan 版），雙語字幕用它的 llama-server 跑翻譯模型，不進 git
 tests/e2e.mjs  端到端測試：headless Brave 載入插件、播錄音、模擬點圖示、檢查文字稿與雙語字幕
 tests/test_repeats.py  本機程式縮短重複、判斷狀聲詞的單元測試（不需要模型）
+tests/test_hints.py  專有名詞放進 Whisper 提示的規則（只用 tokenizer）
 tests/test_chunking.mjs  錄音頁切段的單元測試：背景一直有聲音時也要在句子停頓處切（不需要瀏覽器和模型）
 tests/test_native_host.py  照瀏覽器的方式從註冊位置啟動本機程式、交換訊息（Linux、Windows 都能跑；GitHub Actions 在 Windows 上跑）
 docs/research/ 選型筆記與速度量測（中文）
@@ -170,6 +178,7 @@ node tests/e2e.mjs --audio $C/alice-one-syllable-ch02.mp3 --start 60 --duration 
 node tests/e2e.mjs --audio $C/gongitsune-01.mp3 --start 60 --duration 40 --lang ja --bilingual on
 node tests/e2e.mjs --audio $C/fleurs-th-dev.mp3 --start 0 --duration 84 --lang th --bilingual on
 host/.venv/bin/python -m unittest tests/test_repeats.py
+host/.venv/bin/python -m unittest tests/test_hints.py
 node tests/test_chunking.mjs
 host/.venv/bin/python tests/test_native_host.py   # Windows：host\.venv\Scripts\python.exe tests\test_native_host.py
 ```
