@@ -6,10 +6,14 @@
 
 訊息格式：每則前面 4 位元組 little-endian 長度，後面接 UTF-8 JSON。
   收  {"type": "start", "language": "en" | "ja" | "th", "translate": false, "hints": "donk, MOUZ"}（連線後第一則，決定載入哪個模型）
+      {"type": "start", "whisper": false, "language": "en" | 任何字幕語言 | "auto", "translate": false}
+        （YouTube 字幕模式：不載入 Whisper，只翻譯插件送來的字幕）
       {"type": "audio", "id": 3, "offset": 12.5, "pcm": "<base64，int16 LE 單聲道 16 kHz>"}（講完的一句，定稿）
       {"type": "partial", "id": 4, "offset": 20.1, "pcm": "..."}（還沒講完的一句，即時字幕）
       {"type": "translate", "enabled": true}（錄音中打開或關掉雙語字幕）
       {"type": "hints", "text": "..."}（錄音中改了專有名詞）
+      {"type": "text", "segments": [{"start": 12.9, "end": 15.1, "text": "..."}]}（YouTube 字幕模式：要翻譯的字幕）
+      {"type": "language", "language": "en"}（YouTube 字幕模式：知道字幕的語言了，決定湊句子的方式）
       {"type": "flush"}（錄音停了：手上還沒翻的句子翻完後回 flushed）
   送  {"type": "status", "state": "loading" | "ready", "model": ..., "device": ..., "language": ...}
       {"type": "segments", "id": 3, "segments": [{"start": 12.9, "end": 15.1, "text": "..."}], "elapsed": 1.2}
@@ -584,6 +588,11 @@ def kill_with_host(proc):
         log.warning("AssignProcessToJobObject failed: %s", ctypes.get_last_error())
 
 
+def base_language(code):
+    """YouTube 字幕的語言代碼（en、en-US、ja、zh-Hant…）只取主要部分。"""
+    return str(code or "").split("-")[0].lower()
+
+
 def incoming(first):
     """第一則已經讀過了：不是 start 的話（舊版插件）也要當一般訊息處理。"""
     if first.get("type") != "start":
@@ -605,16 +614,22 @@ def main():
     first = read_message()
     if first is None:
         return 0
-    language = first.get("language", "en") if first.get("type") == "start" else "en"
-    if language not in LANGUAGES:
+    start = first if first.get("type") == "start" else {}
+    language = start.get("language", "en")
+    if start.get("whisper", True) is False:
+        # YouTube 字幕模式：文字由插件送來，只翻譯。字幕的語言什麼都有，認不得的就一行一行翻（同泰文）。
+        model, name, device = None, "none", ""
+        language = base_language(language)
+    elif language not in LANGUAGES:
         send({"type": "error", "message": f"不支援的語言：{language}"})
         return 1
-    try:
-        model, name, device = load_model(config, language)
-    except Exception as exc:
-        log.exception("model load failed")
-        send({"type": "error", "message": f"Whisper 模型載入失敗：{exc}"})
-        return 1
+    else:
+        try:
+            model, name, device = load_model(config, language)
+        except Exception as exc:
+            log.exception("model load failed")
+            send({"type": "error", "message": f"Whisper 模型載入失敗：{exc}"})
+            return 1
     log.info("ready model=%s device=%s language=%s", name, device, language)
     send({"type": "status", "state": "ready", "model": name, "device": device, "language": language})
 
@@ -632,13 +647,21 @@ def main():
 
 def run(model, config, language, translator, first):
     prompt = ""
-    hints = clip_hints(model, first.get("hints")) if first.get("type") == "start" else ""
+    hints = clip_hints(model, first.get("hints")) if model and first.get("type") == "start" else ""
     log.info("hints chars=%d", len(hints))  # 只記長度，不記內容
     for msg in incoming(first):
         kind = msg.get("type")
         if kind == "hints":  # 錄音中改了側邊欄的專有名詞
-            hints = clip_hints(model, msg.get("text"))
+            hints = clip_hints(model, msg.get("text")) if model else ""
             log.info("hints chars=%d", len(hints))
+            continue
+        if kind == "text":  # YouTube 字幕模式：插件送來的字幕，只翻譯
+            segments = [s for s in msg.get("segments", []) if isinstance(s, dict) and s.get("text")]
+            log.info("captions segments=%d", len(segments))
+            translator.add_segments(segments)
+            continue
+        if kind == "language":
+            translator.language = base_language(msg.get("language"))
             continue
         if kind == "translate":
             translator.set_enabled(bool(msg.get("enabled")))

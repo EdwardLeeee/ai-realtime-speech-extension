@@ -5,11 +5,14 @@
 //   chrome.storage.local.recordings  文字稿 [{ id, title, url, language, startedAt, segments: [{ start, end, text, translation? }] }]
 //   chrome.storage.local.language    側邊欄選的語言（en | ja | th），下次開始錄音時生效
 //   chrome.storage.local.bilingual   雙語字幕開關；錄音中切換會馬上通知本機程式啟動或關掉翻譯模型
+//   chrome.storage.local.ytCaptions  「YouTube 字幕」開關：開著時，在有 CC 的 YouTube 影片上直接用播放器的字幕，不錄音、不跑 Whisper
 //   chrome.storage.local.hints       各語言的專有名詞 { en: 'donk, MOUZ', ja: '…' }，放在 Whisper 提示最前面；錄音中改了馬上通知本機程式
 //   chrome.storage.local.overlay     網頁字幕開關（預設開）；overlayPos、overlaySize 是網頁字幕的位置和使用者拖出來的大小，由 caption-overlay.js 存
 // 即時字幕（還沒講完的那一句）每秒更新，不寫 storage，直接用 runtime 訊息 { type: 'caption' } 推給側邊欄，
 // 它的譯文用 { type: 'caption-translation' }。
 // 網頁字幕（caption-overlay.js）注入在被錄的分頁裡，用 tabs.sendMessage 推上一句定稿和正在講的這一句；
+// YouTube 字幕：yt-caption-hook.js（頁面的 world）看播放器自己抓的字幕檔，yt-caption-bridge.js 照影片播放時間
+// 把每一句用 { type: 'yt-cue' } 送來；這時不開錄音頁、不載入 Whisper，本機程式只在雙語字幕開著時負責翻譯。
 // 分頁換頁（整頁重新載入）後原本的字幕框就不見了，載入完再注入一次。換頁不會讓分頁錄音結束（2026-10 Brave 155 實測，
 // 同網站、換網站、brave:// 頁都一樣），所以錄音照常，只要補字幕框。
 
@@ -18,6 +21,7 @@ const OFFSCREEN_URL = 'offscreen.html';
 const HOST_CONNECT_TIMEOUT_MS = 15_000;
 const STOP_TIMEOUT_MS = 120_000;
 const HOST_LOG = '~/.cache/tab-transcriber/host.log';
+const CC_WAIT_MS = 10_000; // YouTube 字幕模式開始後這麼久還沒收到字幕，就提示打開 CC
 
 const IDLE = {
   status: 'idle', // idle | starting | recording | stopping | error
@@ -33,6 +37,7 @@ const IDLE = {
   pending: 0,
   translator: null, // null（雙語字幕關著）| loading | ready
   translatorDevice: '', // gpu | cpu
+  source: '', // whisper | youtube（YouTube 字幕）
 };
 
 let port = null; // 和本機程式的連線，只在錄音期間存在
@@ -76,6 +81,11 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 
+// YouTube 字幕模式沒有錄音頁，分頁關掉要自己發現。
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (rec?.captions && rec.tabId === tabId) onCaptureDone('ended');
+});
+
 // 被錄的分頁載入完一頁就補上字幕框（字幕框自己會擋重複注入；YouTube 換影片這種不重新載入整頁的，字幕框本來就還在）。
 chrome.tabs.onUpdated.addListener(async (tabId, info) => {
   if (rec?.tabId !== tabId || info.status !== 'complete' || rec.stopping) return;
@@ -89,9 +99,18 @@ chrome.action.onClicked.addListener((tab) => {
   if (!rec) start(tab);
 });
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.target === 'offscreen') return;
   switch (msg.type) {
+    case 'yt-hello': // YouTube 分頁重新整理後問還在不在錄它
+      sendResponse({ active: Boolean(rec?.captions && !rec.stopping && sender.tab?.id === rec.tabId) });
+      break;
+    case 'yt-track':
+      if (rec?.captions && sender.tab?.id === rec.tabId) onTrack(msg);
+      break;
+    case 'yt-cue':
+      if (rec?.captions && sender.tab?.id === rec.tabId) onCue(msg);
+      break;
     case 'start':
       chrome.tabs.query({ active: true, windowId: msg.windowId }).then(([tab]) => tab && start(tab));
       break;
@@ -144,9 +163,14 @@ async function start(tab) {
     overlay: false, // 網頁字幕已經注入分頁
     lines: { prev: null, live: null }, // 網頁字幕顯示的上一句定稿 { start, text, tr } 和即時字幕 { id, text, tr }
   };
-  const { language = 'en' } = await chrome.storage.local.get('language');
+  const { language = 'en', ytCaptions = false } = await chrome.storage.local.get(['language', 'ytCaptions']);
   rec.language = language;
   await setState({ ...IDLE, status: 'starting', tabId: tab.id, title: tab.title ?? '', recId: id, language });
+  // 只有 YouTube 分頁裡有 yt-caption-bridge.js 會回答
+  const probe = ytCaptions
+    ? await chrome.tabs.sendMessage(tab.id, { target: 'yt-captions', type: 'probe' }, { frameId: 0 }).catch(() => null)
+    : null;
+  if (probe?.youtube) return startCaptions(tab, probe.track);
   try {
     await ensureOffscreen();
     // 先拿分頁音訊：這一步最常因為「沒在那個分頁點圖示」失敗，失敗就不必啟動 Whisper。
@@ -176,8 +200,73 @@ async function start(tab) {
   }
 }
 
+// YouTube 字幕模式：不錄音、不載入 Whisper；本機程式只用來翻譯（雙語字幕開著時）。
+async function startCaptions(tab, track) {
+  const { id } = rec;
+  rec.captions = true;
+  rec.cueKeys = new Set(); // 這次錄音收過的句子（影片|開始時間），網頁重新整理後重送的會擋掉
+  const lang = track?.lang ?? '';
+  try {
+    await connectHost();
+    const { bilingual = false } = await chrome.storage.local.get('bilingual');
+    rec.translate = bilingual;
+    port.postMessage({ type: 'start', whisper: false, language: lang || 'auto', translate: bilingual });
+    if (bilingual) setState({ translator: 'loading' });
+    const startedAt = Date.now();
+    await updateRecordings((list) =>
+      list.push({ id, title: tab.title ?? '', url: tab.url ?? '', language: lang, source: 'youtube', startedAt, segments: [] }),
+    );
+    await setState({ status: 'recording', startedAt, source: 'youtube', model: ccLabel(track), device: '' });
+    await chrome.tabs.sendMessage(tab.id, { target: 'yt-captions', type: 'start' }, { frameId: 0 });
+    rec.ccTimer = setTimeout(() => {
+      if (rec?.id === id && !rec.cueKeys.size) {
+        setState({ message: '還沒收到 YouTube 字幕：請在播放器打開 CC。已經打開的話，重新整理網頁或換一次字幕語言。' });
+      }
+    }, CC_WAIT_MS);
+    const { overlay = true } = await chrome.storage.local.get('overlay');
+    setOverlay(overlay);
+  } catch (err) {
+    await fail(explain(err));
+  }
+}
+
+function ccLabel(track) {
+  if (!track) return 'YouTube 字幕';
+  return `YouTube ${track.asr ? '自動字幕' : '字幕'}${track.lang ? `（${track.lang}）` : ''}`;
+}
+
+function onTrack(msg) {
+  setState({ model: ccLabel(msg), message: '' });
+  if (port && msg.lang) port.postMessage({ type: 'language', language: msg.lang });
+  const recId = rec.id;
+  updateRecordings((list) => {
+    const r = list.find((x) => x.id === recId);
+    if (r && msg.lang) r.language = msg.lang;
+  });
+}
+
+function onCue(msg) {
+  const key = `${msg.videoId}|${msg.start}`;
+  if (rec.stopping || rec.cueKeys.has(key)) return;
+  if (!rec.cueKeys.size) setState({ message: '' });
+  rec.cueKeys.add(key);
+  const seg = { start: msg.start, end: msg.end, text: msg.text };
+  const recId = rec.id;
+  updateRecordings((list) => list.find((r) => r.id === recId)?.segments.push(seg));
+  // 網頁字幕：上一句和現在這一句（YouTube 字幕一出來就是整句，沒有「還沒講完」的即時字幕）
+  rec.lines.prev = rec.lines.live;
+  rec.lines.live = { start: seg.start, text: seg.text, tr: '' };
+  pushOverlay();
+  if (rec.translate && port) port.postMessage({ type: 'text', segments: [seg] });
+}
+
 function stop() {
   if (!rec || rec.stopping) return;
+  if (rec.captions) {
+    chrome.tabs.sendMessage(rec.tabId, { target: 'yt-captions', type: 'stop' }, { frameId: 0 }).catch(() => {});
+    onCaptureDone('stopped');
+    return;
+  }
   rec.stopping = true;
   setState({ status: 'stopping' });
   stopTimer = setTimeout(() => finish('最後幾段等太久沒有轉完，已略過。'), STOP_TIMEOUT_MS);
@@ -188,7 +277,7 @@ function stop() {
 function onCaptureDone(reason) {
   if (!rec) return;
   if (!rec.stopping) {
-    // 不是使用者按停止：分頁關掉了（換頁不會）。
+    // 不是使用者按停止：分頁關掉了（換頁不會）。YouTube 字幕模式按停止也走這裡。
     rec.stopping = true;
     stopTimer = setTimeout(() => finish('最後幾段等太久沒有轉完，已略過。'), STOP_TIMEOUT_MS);
     setState({ status: 'stopping', message: reason === 'ended' ? '分頁已關閉，錄音已停止。' : '' });
@@ -284,7 +373,8 @@ function pushOverlay() {
 function onHostMessage(msg) {
   if (!rec) return;
   if (msg.type === 'status') {
-    setState(msg.state === 'ready' ? { host: 'ready', model: msg.model, device: msg.device } : { host: 'loading' });
+    if (rec.captions) setState({ host: msg.state === 'ready' ? 'ready' : 'loading' }); // 模型欄顯示字幕來源
+    else setState(msg.state === 'ready' ? { host: 'ready', model: msg.model, device: msg.device } : { host: 'loading' });
   } else if (msg.type === 'partial') {
     rec.partialInFlight = false;
     // 定稿已經回來的段落，晚到的即時字幕就不顯示了。
@@ -307,9 +397,11 @@ function onHostMessage(msg) {
       const seg = list.find((r) => r.id === recId)?.segments.findLast((s) => s.start === msg.start);
       if (seg) seg.translation = msg.text;
     });
-    if (rec.lines.prev?.start === msg.start) {
-      rec.lines.prev.tr = msg.text;
-      pushOverlay();
+    for (const line of [rec.lines.prev, rec.lines.live]) {
+      if (line?.start === msg.start) {
+        line.tr = msg.text;
+        pushOverlay();
+      }
     }
   } else if (msg.type === 'partial-translation') {
     if (rec.translate && msg.id > rec.lastFinalId && msg.text) sendCaptionTranslation({ id: msg.id, text: msg.text });
@@ -339,6 +431,7 @@ function maybeFinish() {
 
 async function finish(message) {
   clearTimeout(stopTimer);
+  clearTimeout(rec?.ccTimer);
   if (rec) removeOverlay(rec.tabId);
   port?.disconnect();
   port = null;
@@ -353,6 +446,8 @@ async function finish(message) {
 
 async function fail(message) {
   clearTimeout(stopTimer);
+  clearTimeout(rec?.ccTimer);
+  if (rec?.captions) chrome.tabs.sendMessage(rec.tabId, { target: 'yt-captions', type: 'stop' }, { frameId: 0 }).catch(() => {});
   if (rec) removeOverlay(rec.tabId);
   port?.disconnect();
   port = null;

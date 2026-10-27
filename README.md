@@ -101,6 +101,15 @@ Notes:
 - In videos with a lot of music or singing and little speech, Whisper sometimes produces sentences nobody said; in Japanese a common one is "ご視聴ありがとうございました". This is a known Whisper problem. The program limits how long such output can get: a segment with only a second or two of speech used to stall for about 10 seconds and now takes about 2; segments with more speech can still stall for 4–5 seconds. The phantom sentences can still appear.
 - Continuous interjections, backchannels or laughter (e.g. repeated "うん、うん" or "ううう") are written out literally by Whisper. Runs repeated 4 or more times are shortened to 3 plus "…" (e.g. "うん。 うん。 うん。…"), and such repetition no longer triggers re-transcription at six temperatures (which used to stall a segment, and the captions, for 8–16 seconds).
 
+## YouTube captions
+
+- With the "YouTube 字幕" (YouTube captions) switch on in the side panel, clicking the icon on a YouTube video that has captions (CC) uses the player's own captions: nothing is recorded, Whisper doesn't run and the GPU isn't used. Human-made captions are usually more accurate than Whisper; auto-generated ones are YouTube's own quality.
+- Turn CC on in the player first (press C or the captions button). The extension only reads the caption file the player itself loads and never downloads anything else. If no captions arrive within 10 seconds it tells you; if CC is already on, reload the page or switch the caption language once.
+- The time in front of each line is **the video's own time**. Seeking back or reloading the page doesn't record the same line twice.
+- Bilingual captions still work, translated to Traditional Chinese by the local model; the captions can be in any language.
+- On sites other than YouTube, or videos without captions (most live streams), it records and uses Whisper as usual.
+- So far this has only been verified on a mock YouTube page: in the automated test browser YouTube blocks captions and playback. It hasn't been tested on real YouTube yet, and YouTube changes could break it.
+
 ## Proper nouns
 
 - Put names Whisper keeps getting wrong (people, teams, terms) into the "專有名詞" (proper nouns) field in the side panel, separated by commas, e.g. `donk, MOUZ, torzsi, Five-SeveN`, and Whisper will spell them that way.
@@ -193,6 +202,7 @@ tests/test_repeats.py  Unit tests for shortening repeats and detecting interject
 tests/test_hints.py  Rules for putting proper nouns into the Whisper prompt (tokenizer only)
 tests/test_chunking.mjs  Unit test for where the recorder splits audio, including with constant background sound (no browser or model needed)
 tests/test_native_host.py  Starts the local program from its registration like a browser would and exchanges messages (Linux and Windows; GitHub Actions runs it on Windows)
+tests/e2e_youtube_cc.mjs  YouTube captions mode on a mock YouTube watch page: lines follow video time, no duplicates, no recording
 install.sh     Install for Linux and macOS; install.ps1 is the Windows one (install.cmd runs it on double-click)
 installer/TabTranscriber.iss  Windows installer (Inno Setup): copies files, then runs install.ps1; built by GitHub Actions and attached to the Release on v* tags
 .github/workflows/install.yml  Linux unit tests plus macOS and Windows install tests (Windows builds Setup.exe and installs it silently)
@@ -209,6 +219,7 @@ node tests/e2e.mjs --audio $C/fleurs-th-dev.mp3 --start 0 --duration 84 --lang t
 host/.venv/bin/python -m unittest tests/test_repeats.py
 host/.venv/bin/python -m unittest tests/test_hints.py
 node tests/test_chunking.mjs
+node tests/e2e_youtube_cc.mjs
 host/.venv/bin/python tests/test_native_host.py   # Windows: host\.venv\Scripts\python.exe tests\test_native_host.py
 ```
 

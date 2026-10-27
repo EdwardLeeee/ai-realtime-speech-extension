@@ -99,6 +99,15 @@ cd ai-realtime-speech-extension
 - 配樂或歌聲多、講話少的影片，偶爾會冒出沒人講的句子，日文常見的是「ご視聴ありがとうございました」。這是 Whisper 本身的毛病。程式已經限制這種句子的長度：講話只有一兩秒的段落，以前會卡住約 10 秒，現在約 2 秒；講話較多的段落仍可能卡住 4–5 秒。句子本身還是可能出現。
 - 連續的狀聲詞、附和或笑聲（例如一直「うん、うん」「ううう」），Whisper 會照實寫成一長串。程式會把連續重複 4 次以上的部分縮成 3 次加「…」（例如「うん。 うん。 うん。…」），也不再為了這種重複換六個溫度重轉（以前一段會卡 8–16 秒，字幕跟著停住）。
 
+## YouTube 字幕
+
+- 打開側邊欄的「YouTube 字幕」開關後，在有字幕（CC）的 YouTube 影片上點圖示，就直接用 YouTube 播放器的字幕：不錄聲音、不跑 Whisper，也不佔顯示卡。人工字幕通常比 Whisper 準；自動產生的字幕就是 YouTube 自己的品質。
+- 要先在播放器打開 CC（按 C 鍵或字幕按鈕）。插件只讀播放器自己載入的那份字幕，不另外下載。10 秒內沒拿到字幕會提示；已經打開 CC 的話，重新整理網頁或換一次字幕語言。
+- 每句前面的時間是**影片本身的時間**。往回拖或重新整理網頁，不會重複記同一句。
+- 雙語字幕照樣可以開，用這台電腦上的翻譯模型翻成繁體中文；字幕是什麼語言都可以。
+- 不是 YouTube，或影片沒有字幕（例如大部分直播）時，照常錄音、用 Whisper 轉。
+- 目前只在模擬 YouTube 的測試網頁上驗證過：自動化測試用的瀏覽器裡，YouTube 會擋字幕和播放。真的 YouTube 還沒實測，YouTube 改版也可能讓它失效。
+
 ## 專有名詞
 
 - 側邊欄的「專有名詞」欄位填常被轉錯的人名、隊名、術語，用逗號分開，例如 `donk, MOUZ, torzsi, Five-SeveN`，Whisper 就會照著拼。
@@ -191,6 +200,7 @@ tests/test_repeats.py  本機程式縮短重複、判斷狀聲詞的單元測試
 tests/test_hints.py  專有名詞放進 Whisper 提示的規則（只用 tokenizer）
 tests/test_chunking.mjs  錄音頁切段的單元測試：背景一直有聲音時也要在句子停頓處切（不需要瀏覽器和模型）
 tests/test_native_host.py  照瀏覽器的方式從註冊位置啟動本機程式、交換訊息（Linux、Windows 都能跑；GitHub Actions 在 Windows 上跑）
+tests/e2e_youtube_cc.mjs  YouTube 字幕模式：假的 YouTube 觀看頁，檢查字幕照影片時間進文字稿、不重複、不錄音
 install.sh     Linux、macOS 的安裝；install.ps1 是 Windows 的（install.cmd 點兩下執行它）
 installer/TabTranscriber.iss  Windows 安裝檔（Inno Setup）：複製檔案後執行 install.ps1；GitHub Actions 編譯，推 v* tag 時放上 Release
 .github/workflows/install.yml  Linux 單元測試、macOS 和 Windows 的安裝測試（Windows 是編出 Setup.exe 再靜默安裝）
@@ -207,6 +217,7 @@ node tests/e2e.mjs --audio $C/fleurs-th-dev.mp3 --start 0 --duration 84 --lang t
 host/.venv/bin/python -m unittest tests/test_repeats.py
 host/.venv/bin/python -m unittest tests/test_hints.py
 node tests/test_chunking.mjs
+node tests/e2e_youtube_cc.mjs
 host/.venv/bin/python tests/test_native_host.py   # Windows：host\.venv\Scripts\python.exe tests\test_native_host.py
 ```
 

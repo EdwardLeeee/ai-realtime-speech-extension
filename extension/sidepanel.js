@@ -12,6 +12,7 @@ let recordings = [];
 let language = 'en';
 let bilingual = false; // 雙語字幕開關：開著才顯示（和複製、下載）譯文
 let overlay = true; // 網頁字幕開關：錄音時在被錄的網頁上浮著即時字幕
+let ytCaptions = false; // YouTube 字幕開關：有 CC 的 YouTube 影片直接用播放器的字幕
 let hints = {}; // 各語言的專有名詞 { en: 'donk, MOUZ' }
 let hintsTimer = null;
 let textSize = DEFAULT_TEXT_SIZE;
@@ -26,9 +27,10 @@ async function load() {
     language = 'en',
     bilingual = false,
     overlay = true,
+    ytCaptions = false,
     hints = {},
     textSize = DEFAULT_TEXT_SIZE,
-  } = await chrome.storage.local.get(['recordings', 'language', 'bilingual', 'overlay', 'hints', 'textSize']));
+  } = await chrome.storage.local.get(['recordings', 'language', 'bilingual', 'overlay', 'ytCaptions', 'hints', 'textSize']));
   render();
 }
 
@@ -38,6 +40,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.language) language = changes.language.newValue ?? 'en';
   if (area === 'local' && changes.bilingual) bilingual = Boolean(changes.bilingual.newValue);
   if (area === 'local' && changes.overlay) overlay = changes.overlay.newValue !== false;
+  if (area === 'local' && changes.ytCaptions) ytCaptions = Boolean(changes.ytCaptions.newValue);
   if (area === 'local' && changes.hints) hints = changes.hints.newValue ?? {};
   if (area === 'local' && changes.textSize) textSize = changes.textSize.newValue ?? DEFAULT_TEXT_SIZE;
   render();
@@ -77,6 +80,7 @@ function statusText() {
     case 'starting':
       return '準備中…';
     case 'recording':
+      if (state.source === 'youtube') return '用 YouTube 字幕';
       return state.host === 'ready' ? '錄音中' : '錄音中 · 載入 Whisper 模型…';
     case 'stopping':
       return '轉完最後幾段…';
@@ -126,7 +130,8 @@ function render() {
   $('dot').className = `dot ${
     state.status === 'recording' ? 'rec' : state.status === 'error' ? 'err' : active ? 'busy' : ''
   }`;
-  const model = state.model ? ` · ${state.model} ${state.device === 'cuda' ? 'GPU' : 'CPU'}` : '';
+  const model = state.source === 'youtube' ? ` · ${state.model}`
+    : state.model ? ` · ${state.model} ${state.device === 'cuda' ? 'GPU' : 'CPU'}` : '';
   $('source').textContent = active && state.title ? `${state.title}${model}` : '';
   if (!active) $('meter-fill').style.width = '0';
 
@@ -136,6 +141,8 @@ function render() {
   if (document.activeElement !== $('hints')) $('hints').value = hints[$('language').value] ?? '';
   $('bilingual').checked = bilingual;
   $('overlay').checked = overlay;
+  $('yt-captions').checked = ytCaptions;
+  $('yt-captions').disabled = active; // 開始時決定用哪一種，錄音中不能換
   $('bilingual-hint').textContent = translatorHint();
   document.documentElement.style.setProperty('--text-size', `${textSize}px`);
   $('smaller').disabled = textSize <= TEXT_SIZES[0];
@@ -164,7 +171,7 @@ function render() {
     head.className = 'rec-head';
     const title = document.createElement('strong');
     title.textContent = r.title || '（沒有標題的分頁）';
-    head.append(title, ` · ${LANGUAGE_NAMES[r.language ?? 'en']} · ${formatDate(r.startedAt)}`);
+    head.append(title, ` · ${languageName(r)} · ${formatDate(r.startedAt)}`);
     main.append(head);
     for (const seg of r.segments) main.append(makeLine(seg.start, seg.text, seg.translation));
   }
@@ -207,6 +214,12 @@ function updateElapsed() {
 }
 setInterval(updateElapsed, 1000);
 
+// YouTube 字幕的語言代碼什麼都有（en、en-US、ko…），認得的顯示中文名稱
+function languageName(r) {
+  const name = LANGUAGE_NAMES[(r.language ?? 'en').split('-')[0]] ?? (r.language || '未知語言');
+  return r.source === 'youtube' ? `YouTube 字幕（${name}）` : name;
+}
+
 function transcriptText() {
   return recordings
     .filter((r) => r.segments.length)
@@ -214,9 +227,11 @@ function transcriptText() {
       [
         `來源：${r.title || '（沒有標題的分頁）'}`,
         r.url ? `網址：${r.url}` : null,
-        `語言：${LANGUAGE_NAMES[r.language ?? 'en']}`,
+        `語言：${languageName(r)}`,
         bilingual && r.segments.some((s) => s.translation) ? '翻譯：繁體中文（這台電腦上的翻譯模型，僅供參考）' : null,
-        `開始：${formatDate(r.startedAt)}（時間從開始錄音算起）`,
+        r.source === 'youtube'
+          ? `開始：${formatDate(r.startedAt)}（時間是影片本身的時間）`
+          : `開始：${formatDate(r.startedAt)}（時間從開始錄音算起）`,
         '',
         ...r.segments.flatMap((s) => {
           const head = `[${formatTime(s.start)}] `;
@@ -240,6 +255,7 @@ $('language').addEventListener('change', (e) => chrome.storage.local.set({ langu
 $('bilingual').addEventListener('change', (e) => chrome.storage.local.set({ bilingual: e.target.checked }));
 // 網頁字幕也一樣：背景程式在錄音中的分頁加上或拿掉字幕；字幕右上角的 × 也是把這個開關關掉。
 $('overlay').addEventListener('change', (e) => chrome.storage.local.set({ overlay: e.target.checked }));
+$('yt-captions').addEventListener('change', (e) => chrome.storage.local.set({ ytCaptions: e.target.checked }));
 // 專有名詞：停止打字 0.6 秒後存；錄音中背景程式會把新的名單交給本機程式，下一句就生效。
 $('hints').addEventListener('input', (e) => {
   clearTimeout(hintsTimer);

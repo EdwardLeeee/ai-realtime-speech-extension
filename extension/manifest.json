@@ -20,6 +20,10 @@
     "service_worker": "background.js",
     "type": "module"
   },
+  "content_scripts": [
+    { "matches": ["https://www.youtube.com/*"], "js": ["yt-caption-hook.js"], "run_at": "document_start", "world": "MAIN" },
+    { "matches": ["https://www.youtube.com/*"], "js": ["yt-caption-bridge.js"], "run_at": "document_start" }
+  ],
   "action": {
     "default_title": "開始把這個分頁的錄音轉成文字稿",
     "default_icon": {

@@ -101,6 +101,8 @@ body {
 .switch input:checked + .track { background: var(--accent); }
 .switch input:checked + .track::after { transform: translateX(14px); }
 .switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch:has(input:disabled) { opacity: 0.5; cursor: default; }
+.switch:has(input:disabled) input { cursor: default; }
 @media (prefers-reduced-motion: reduce) { .switch .track, .switch .track::after { transition: none; } }
 /* 提示放在開關下面自己一行 */
 .hint { order: 1; flex-basis: 100%; color: var(--muted); font-size: 12px; }

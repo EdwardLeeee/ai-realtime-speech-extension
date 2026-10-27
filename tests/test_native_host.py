@@ -5,6 +5,7 @@ Linux、macOS、Windows 都能跑，用來確認 install.sh／install.ps1 裝好
   2. 送 start，等模型載入；送一段英文錄音，要回轉好的英文。
   3. 打開雙語字幕，要回翻譯模型 ready 和中文譯文；送 flush 要回 flushed。
   4. 關掉 stdin（等於瀏覽器斷線），本機程式和翻譯模型都要結束。
+  4b. YouTube 字幕模式：不載入 Whisper（很快就 ready），送字幕文字要回中文譯文。
   5. Windows：本機程式被強制結束時，放進 job 的子程序要跟著結束。
 
 用法：host/.venv/bin/python tests/test_native_host.py [--no-translate]（Windows：host\\.venv\\Scripts\\python.exe）
@@ -166,6 +167,27 @@ def main():
     check(exited, "瀏覽器斷線後本機程式結束")
     time.sleep(2)
     check(not set(processes(server)) - preexisting, "翻譯模型也已結束")
+
+    if translate:
+        # YouTube 字幕模式：語言是字幕的代碼（en-US），不載入 Whisper，只翻譯送來的字幕
+        host = Host(program)
+        started = time.monotonic()
+        host.send({"type": "start", "whisper": False, "language": "en-US", "translate": True})
+        ready = host.wait_for(lambda m: m.get("type") == "status" and m.get("state") == "ready", 60)
+        check(ready is not None and ready.get("model") == "none" and time.monotonic() - started < 30,
+              f"字幕模式不載入 Whisper（{ready}，{time.monotonic() - started:.1f} 秒）")
+        tr = host.wait_for(lambda m: m.get("type") == "translator" and m.get("state") in ("ready", "error"), 300)
+        check(tr is not None and tr["state"] == "ready", f"字幕模式的翻譯模型啟動：{tr}")
+        host.send({"type": "text", "segments": [{"start": 3.0, "end": 5.0, "text": "Where are you going tonight?"}]})
+        got = host.wait_for(lambda m: m.get("type") == "translation", 120)
+        print("  譯文：", (got or {}).get("text"), flush=True)
+        check(got is not None and got.get("start") == 3.0 and any("\u4e00" <= c <= "\u9fff" for c in got["text"]),
+              "字幕模式：送來的字幕翻成中文")
+        host.proc.stdin.close()
+        try:
+            host.proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            host.proc.kill()
 
     if WINDOWS:
         # 用本機程式的 kill_with_host 把一個子程序放進 job，再強制結束父程序：子程序要跟著結束
