@@ -1,147 +1,161 @@
-# Tab Transcriber：英文／日文／泰文錄音轉文字稿
+# AI Realtime Speech Extension (Tab Transcriber)
 
-Brave／Chrome 插件。把分頁正在播放的英文、日文或泰文錄音（練習網站、YouTube、Podcast 網頁……）轉成每句附時間的文字稿，可以再加上繁體中文的雙語字幕：
+English | [繁體中文](README.zh-TW.md)
+
+A Brave/Chrome extension that turns English, Japanese or Thai audio playing in a browser tab (practice sites, YouTube, Twitch, podcast pages…) into a timestamped transcript with live captions, and can add Traditional Chinese translations underneath:
 
 ```
 [00:00] They must go by the mail, she thought, and how funny it'll seem to send shoes to one's own feet, how odd the address will look.
         她想，他們必須通過郵寄的方式來送東西。把鞋子寄到自己腳邊，會有多有趣啊！而地址的寫法也一定會很奇怪吧。
 ```
 
-- 在這台電腦上用 Whisper（faster-whisper）轉，聲音和文字都不會上傳。有 NVIDIA 顯示卡就用顯示卡跑 large-v3-turbo 模型，沒有就用 CPU 跑 small 模型。
-- 即時字幕：側邊欄最下面會出現淺色的字幕，用顯示卡時約每 1 秒更新一次（只有 CPU 時約 2 秒）；一句講完停頓後，再定稿成正式的一行。剛按開始時要先載入模型，第一行字幕會多等 2–3 秒。
-- 網頁字幕：播放的網頁上也會浮著一個可以拖動的字幕框，顯示上一句和正在講的這一句，影片全螢幕時也看得到。詳見下面的「網頁字幕」。
-- 雙語字幕：側邊欄的「雙語字幕」開關打開時，每句原文下面會加上繁體中文翻譯，即時字幕也會一起翻。翻譯也在這台電腦上做（騰訊 Hy-MT2-1.8B 模型），錄音中可以隨時開關。詳見下面的「雙語字幕」。
-- 錄音時照常聽得到聲音。
-- 轉文字的程式只在錄音時啟動，停止後就結束，平常不常駐。錄音期間最多佔約 1.8 GB 系統記憶體（顯示卡模式；只有 CPU 時約 1.3 GB）。打開雙語字幕時，翻譯模型另外佔約 2 GB 顯示記憶體、0.9 GB 系統記憶體，關掉開關就釋放。
+- Speech recognition runs on your own computer with Whisper (faster-whisper); no audio or text is uploaded. With an NVIDIA GPU it uses the large-v3-turbo model; without one it uses the small model on the CPU.
+- Live captions: a light-coloured caption at the bottom of the side panel updates about once a second on a GPU (about every 2 seconds on CPU only). When a sentence ends with a pause, it is finalised as a regular line. The first caption takes an extra 2–3 seconds while the model loads.
+- On-page captions: a draggable caption box floats over the page being recorded, showing the previous and current sentence, and stays visible in fullscreen video. See [On-page captions](#on-page-captions).
+- Bilingual captions: turn on the "雙語字幕" (bilingual captions) switch in the side panel to add a Traditional Chinese translation under each sentence, including the live caption. Translation also runs locally (Tencent Hy-MT2-1.8B) and can be toggled while recording. See [Bilingual captions](#bilingual-captions).
+- You still hear the audio while it is being recorded.
+- The speech-to-text program only runs while recording and exits when you stop. While recording it uses up to about 1.8 GB of RAM (GPU mode; about 1.3 GB on CPU only). With bilingual captions on, the translation model uses another ~2 GB of video memory and 0.9 GB of RAM, released when you turn the switch off.
 
-## 安裝（只要做一次）
+The extension's interface is in Traditional Chinese; this README gives the Chinese label next to each English description.
 
-1. 在終端機執行：
+## Requirements
+
+- Linux x86-64 (tested on Ubuntu). The llama.cpp build downloaded for translation is the Ubuntu x64 build.
+- Brave, Chrome or Chromium (tested on Brave 155).
+- [uv](https://docs.astral.sh/uv/) (manages the Python environment) and curl.
+- An NVIDIA GPU with drivers is recommended (tested on an RTX 2060 6 GB); it also works on the CPU, more slowly.
+
+## Install (once)
+
+1. In a terminal:
 
    ```bash
-   ~/Desktop/tofel/tab-transcriber/install.sh
+   git clone https://github.com/EdwardLeeee/ai-realtime-speech-extension.git
+   cd ai-realtime-speech-extension
+   ./install.sh
    ```
 
-   這一步會建 Python 環境、下載 Whisper 模型和雙語字幕用的翻譯模型（約 2 GB），並在 Brave、Chrome 的設定資料夾登記「本機轉文字程式」的位置。偵測到 NVIDIA 驅動時，會另外裝顯示卡用的 CUDA 函式庫（約 2 GB）和 large-v3-turbo 模型（約 1.6 GB）。不需要雙語字幕的話，可以改成執行 `install.sh --no-translate`。
+   This creates the Python environment, downloads the Whisper model and the translation model for bilingual captions (about 2 GB), and registers the local speech-to-text program with Brave and Chrome. If an NVIDIA driver is detected, it also installs the CUDA libraries for the GPU (about 2 GB) and the large-v3-turbo model (about 1.6 GB). If you don't need bilingual captions, run `./install.sh --no-translate` instead.
 
-   從舊版更新的話，也要再執行一次 `install.sh`，才會下載翻譯模型。已經下載過的檔案會核對後跳過。
+   When updating from an older version, run `install.sh` again so it can download anything new. Files that are already downloaded are verified and skipped.
 
-2. 在 Brave 網址列打開 `brave://extensions`（Chrome 用 `chrome://extensions`）。
-3. 打開右上角的「開發人員模式」。
-4. 按「載入未封裝項目」，選 `~/Desktop/tofel/tab-transcriber/extension` 資料夾。插件會要「讀取和變更所有網站上的資料」的權限，只用來在換頁後把網頁字幕放回被錄的分頁。
-5. 按工具列的拼圖圖示，把 **Tab Transcriber** 釘選到工具列。
+2. Open `brave://extensions` in Brave (`chrome://extensions` in Chrome).
+3. Turn on "Developer mode" in the top right.
+4. Click "Load unpacked" and choose the `extension` folder inside this folder. The extension asks for permission to "read and change all your data on all websites"; it only uses it to put the on-page captions back on the recorded tab after the page changes.
+5. Click the puzzle-piece icon in the toolbar and pin **Tab Transcriber**.
 
-## 使用
+## Usage
 
-1. 打開要聽的錄音網頁，按播放。
-2. 點工具列的 Tab Transcriber 圖示：右側會打開側邊欄，用上次選的語言開始錄音（第一次是英文）。
-3. 語言不對的話：按「停止」，在左上的選單改成「英文」「日文」或「泰文」，再按「開始」。選過的語言會記住。
-4. 聽完按側邊欄的「停止」。
-5. 「複製」會把文字稿複製到剪貼簿，「下載 .txt」會存成文字檔。「清除」要連按兩次，避免誤刪。
+1. Open the page with the audio and press play.
+2. Click the Tab Transcriber icon in the toolbar. The side panel opens on the right and starts recording in the language you used last time (English the first time).
+3. If the language is wrong, press "停止" (Stop), pick "英文" (English), "日文" (Japanese) or "泰文" (Thai) in the menu at the top left, then press "開始" (Start). The language is remembered.
+4. Press "停止" (Stop) in the side panel when you are done.
+5. "複製" (Copy) copies the transcript to the clipboard and "下載 .txt" (Download .txt) saves it as a text file. "清除" (Clear) has to be pressed twice so you don't delete it by accident.
 
-側邊欄右上角還有這些按鈕：
+Buttons in the top right of the side panel:
 
-- **A−／A+**：調側邊欄裡文字稿的字體大小，會記住。
-- **收起**：把側邊欄收起來，錄音不會停，網頁字幕照常顯示。錄音中再點工具列圖示就會打開；沒在錄音時點圖示則會開始錄音。
+- **A−/A+**: change the transcript font size in the side panel; remembered.
+- **收起** (Collapse): closes the side panel without stopping the recording; on-page captions keep showing. Clicking the toolbar icon while recording opens it again; clicking it when not recording starts a recording.
 
-注意：
+Notes:
 
-- 每句前面的時間是**從開始錄音算起**，不是影片或錄音本身的播放時間。想讓兩者對齊，就先點圖示再按播放。
-- 錄音中在同一個分頁換頁（YouTube 換影片、同網站換頁、換到別的網站都一樣），錄音不會停，聲音跟著新頁面轉，網頁字幕也會在新頁面上重新出現。換頁後的內容記在同一筆文字稿，標題還是開始錄音時那一頁。
-- 要在一個分頁開始錄，一定要先在那個分頁點過工具列圖示（瀏覽器規定插件只能錄使用者點過的分頁）。點過之後只在同一個網站裡換頁，停止後按側邊欄的「開始」可以直接錄；換到別的網站就要再點一次圖示。
-- 一次只錄一個分頁。錄音中到別的分頁點圖示只會打開側邊欄，不會切換；要先按「停止」，再到新分頁點圖示。
-- 一句話中間停頓超過 0.4 秒，偶爾會被切成兩行（例如 `look through to` / `the garden with one eye.`），文字本身不受影響。
-- 文字稿存在瀏覽器裡，關掉側邊欄或重開瀏覽器都還在，按「清除」才會刪掉。
-- 配樂或歌聲多、講話少的影片，偶爾會冒出沒人講的句子，日文常見的是「ご視聴ありがとうございました」。這是 Whisper 本身的毛病。程式已經限制這種句子的長度：講話只有一兩秒的段落，以前會卡住約 10 秒，現在約 2 秒；講話較多的段落仍可能卡住 4–5 秒。句子本身還是可能出現。
-- 連續的狀聲詞、附和或笑聲（例如一直「うん、うん」「ううう」），Whisper 會照實寫成一長串。程式會把連續重複 4 次以上的部分縮成 3 次加「…」（例如「うん。 うん。 うん。…」），也不再為了這種重複換六個溫度重轉（以前一段會卡 8–16 秒，字幕跟著停住）。
+- The time in front of each sentence counts **from when recording started**, not the video's own playback time. To line them up, click the icon first and then press play.
+- Changing pages in the recorded tab (another YouTube video, another page on the same site, or a different site) does not stop the recording; transcription follows the new page and the on-page captions reappear there. Everything goes into the same transcript, still titled with the page where recording started.
+- To start recording a tab you must click the toolbar icon on that tab first (browsers only let extensions capture tabs the user has invoked them on). After that, as long as you stay on the same site, you can stop and press "開始" (Start) in the side panel to record again; after moving to a different site, click the icon again.
+- Only one tab is recorded at a time. Clicking the icon on another tab while recording only opens the side panel; press Stop first, then click the icon on the new tab.
+- A pause of more than 0.4 seconds in the middle of a sentence occasionally splits it into two lines (e.g. `look through to` / `the garden with one eye.`); the text itself is unaffected.
+- With constant background sound (esports casts, crowds, game audio, background music) lines are still split at pauses in speech, so finished lines don't wait for the 25-second maximum.
+- Transcripts are stored in the browser and survive closing the side panel or restarting the browser; they are only deleted with "清除" (Clear).
+- In videos with a lot of music or singing and little speech, Whisper sometimes produces sentences nobody said; in Japanese a common one is "ご視聴ありがとうございました". This is a known Whisper problem. The program limits how long such output can get: a segment with only a second or two of speech used to stall for about 10 seconds and now takes about 2; segments with more speech can still stall for 4–5 seconds. The phantom sentences can still appear.
+- Continuous interjections, backchannels or laughter (e.g. repeated "うん、うん" or "ううう") are written out literally by Whisper. Runs repeated 4 or more times are shortened to 3 plus "…" (e.g. "うん。 うん。 うん。…"), and such repetition no longer triggers re-transcription at six temperatures (which used to stall a segment, and the captions, for 8–16 seconds).
 
-## 網頁字幕
+## On-page captions
 
-- 側邊欄的「網頁字幕」開關開著時（預設開），錄音中播放的網頁上會浮著一個字幕框：上面淡一點的是上一句，下面是正在講的這一句；雙語字幕開著時，各句下面加上中文。
-- 按住字幕框可以拖到任何位置，位置會記住。
-- 拖字幕框右下角的斜線可以改寬度和高度，字的大小不變：拉寬一行放更多字，拉高可以多顯示幾行（字貼著下緣）。大小會記住，全螢幕時框跟著字一起等比例變大；在右下角按兩下恢復依文字自動調整。沒調過時，一句太長只顯示最新的約五行。
-- 字幕框右上角的 × 會把它關掉，同時關掉側邊欄的「網頁字幕」開關，之後的錄音也不再顯示；要再看就把開關打開，錄音中也可以隨時開關。
-- 影片全螢幕時字幕框也在最上面。網站把整個播放器放大成全螢幕時，照樣可以拖動、改大小、按 ×。如果全螢幕的只有影片本身（例如瀏覽器內建播放器的全螢幕鈕，畫面下方是瀏覽器的播放控制列），或播放器的寫法讓字幕框放不進去，字幕看得到，但拖不動、改不了大小、按不到 ×，要先退出全螢幕。
-- 字幕框只加在被錄音的那個分頁，換頁後會在新頁面重新出現（brave:// 這類瀏覽器內部頁面除外），停止錄音後就會拿掉。
-- 字體大小會跟著畫面寬度調整，全螢幕時比較大。
+- While the "網頁字幕" (on-page captions) switch in the side panel is on (the default), a caption box floats over the page being recorded: the dimmer line on top is the previous sentence, the one below is the sentence being spoken. With bilingual captions on, each sentence has its Chinese translation underneath.
+- Drag the box to move it anywhere; the position is remembered.
+- Drag the diagonal grip in the bottom-right corner to change its width and height without changing the text size: wider fits more words per line, taller shows more lines (text sticks to the bottom). The size is remembered and scales up with the text in fullscreen; double-click the grip to go back to automatic sizing. When not resized, a very long sentence shows only its latest ~5 lines.
+- The × in the top-right corner closes the box and turns off the "網頁字幕" switch, so later recordings won't show it either; turn the switch back on to see it again, also while recording.
+- The caption box stays on top in fullscreen video. When a site puts its whole player into fullscreen, you can still drag, resize and close it. If only the video element itself goes fullscreen (for example the fullscreen button of the browser's built-in player, with the browser's playback controls at the bottom), or the player is built in a way the box can't be placed inside, you can see the captions but can't drag, resize or close them until you exit fullscreen.
+- The box is only added to the recorded tab, reappears after page changes (except internal pages such as brave://), and is removed when recording stops.
+- The font size follows the page width and is larger in fullscreen.
 
-## 雙語字幕
+## Bilingual captions
 
-- 打開側邊欄的「雙語字幕」開關，就會把原文翻成繁體中文，放在每句下面；即時字幕的下一行也會出現譯文。開關會記住，錄音中也可以隨時切換。
-- 剛打開時要先載入翻譯模型，開關旁邊會顯示「載入翻譯模型…」，約 2–5 秒。之後每句定稿後約 0.5–1 秒出現譯文，即時字幕的譯文比原文晚 1 秒以內。
-- 英文、日文會等到句號（. ? ! 。）才一起翻，所以譯文出現在一句話的最後一行下面。逗號結尾的行先不翻，避免翻出半句。泰文幾乎不用標點，所以每一行各自翻；一句話被切成兩行時，那兩行的譯文可能不通順。
-- 只翻打開開關之後的句子，之前錄的不會補翻。關掉開關後，畫面、複製、下載都只有原文，已經翻好的譯文仍然保留，再打開就會顯示。
-- 只有 CPU 時，即時字幕不翻（一句要約 3 秒，跟不上每秒更新），只翻定稿。
-- 翻譯是 1.8B 的小模型，會翻錯，偶爾連意思都會相反。測試中看到的例子：泰文「不太可能被起訴」翻成「可能會被起訴」，日文「モズ（伯勞鳥）」翻成「貓頭鷹」，人名「ゴン」翻成「戈恩」或「岡」。請把譯文當參考。
-- 原文辨識錯的地方，譯文也會跟著錯。
+- Turn on the "雙語字幕" (bilingual captions) switch in the side panel to translate the original into Traditional Chinese under each sentence; the live caption gets a translated line too. The switch is remembered and can be toggled while recording.
+- The translation model loads when you first turn it on; "載入翻譯模型…" (loading translation model) shows next to the switch for about 2–5 seconds. After that, a translation appears about 0.5–1 seconds after each sentence is finalised, and the live caption's translation lags the original by under a second.
+- English and Japanese are translated once a sentence ends (. ? ! 。), so the translation appears under the last line of the sentence. Lines ending in a comma wait, so half sentences aren't translated. Thai hardly uses punctuation, so each line is translated on its own; when a sentence is split into two lines, the two translations may not read smoothly.
+- Only sentences after the switch is turned on are translated; earlier ones are not back-filled. With the switch off, the screen, Copy and Download show only the original; translations already made are kept and reappear when you turn it back on.
+- On CPU only, live captions are not translated (about 3 seconds per sentence can't keep up with once-a-second updates); only finalised lines are.
+- The translator is a small 1.8B model and makes mistakes, occasionally reversing the meaning. Examples seen in testing: Thai "unlikely to be prosecuted" translated as "may be prosecuted", Japanese "モズ" (shrike) as "owl", and the name "ゴン" as "戈恩" or "岡". Treat translations as a reference.
+- Recognition errors in the original carry over into the translation.
 
-## 換模型
+## Changing models
 
-想換模型，可以新增 `~/.config/tab-transcriber/config.json`，只寫要改的部分。`gpu_models` 是有顯示卡時用的，`models` 是只有 CPU 時用的：
+To change models, create `~/.config/tab-transcriber/config.json` with only the parts you want to change. `gpu_models` is used with a GPU and `models` on CPU only:
 
 ```json
 { "gpu_models": { "en": "medium.en" }, "models": { "ja": "medium" } }
 ```
 
-在這台電腦（RTX 2060／12 執行緒 CPU）上量到的速度：
+Speed measured on the author's machine (RTX 2060 / 12-thread CPU):
 
-| 模型 | 跑在 | 60 秒錄音要轉多久 | 即時字幕每次更新要多久 | 說明 |
+| Model | Runs on | Time to transcribe 60 s | Time per live-caption update | Notes |
 |---|---|---|---|---|
-| `large-v3-turbo`（有顯示卡時的預設） | 顯示卡 | 約 1.9 秒 | 0.3–0.4 秒 | 英文、日文都最準 |
-| `small.en`／`small` | 顯示卡 | 約 1.5 秒 | 0.1–0.4 秒 | 較快，錯字較多 |
-| `medium.en`／`medium` | 顯示卡 | 約 4 秒 | 沒有量 | 日文偶爾會重複最後一句 |
-| `small.en`（只有 CPU 時的預設，英文） | CPU | 約 10 秒 | 1.3–2.1 秒 | 字幕約 2 秒更新一次 |
-| `small`（只有 CPU 時的預設，日文） | CPU | 約 12 秒 | 沒有量 | 有錯字，例如「穴から**はい出ました**」轉成「穴から入れました」 |
+| `large-v3-turbo` (default with a GPU) | GPU | ~1.9 s | 0.3–0.4 s | Most accurate for English and Japanese |
+| `small.en` / `small` | GPU | ~1.5 s | 0.1–0.4 s | Faster, more mistakes |
+| `medium.en` / `medium` | GPU | ~4 s | not measured | Japanese sometimes repeats the last sentence |
+| `small.en` (CPU-only default, English) | CPU | ~10 s | 1.3–2.1 s | Captions update about every 2 seconds |
+| `small` (CPU-only default, Japanese) | CPU | ~12 s | not measured | Some mistakes, e.g. "穴から**はい出ました**" (crawled out of the hole) became "穴から入れました" (put into the hole) |
 
-泰文用 Google FLEURS 資料集的 40 句量字元錯誤率（越低越準）：
+Thai character error rate on 40 sentences from Google FLEURS (lower is better):
 
-| 模型 | 跑在 | 字元錯誤率 | 60 秒錄音要轉多久 | 說明 |
+| Model | Runs on | Character error rate | Time to transcribe 60 s | Notes |
 |---|---|---|---|---|
-| `large-v3-turbo`（有顯示卡時的預設） | 顯示卡 | 12.3% | 約 3.5 秒 | 常見錯誤是拼字，例如 ร／ล 混淆（「ดังกล่าว」轉成「ดังกราว」） |
-| `large-v3` | 顯示卡 | 8.3% | 約 10 秒 | 最準，但即時字幕會變慢；顯示記憶體約 3.8 GB（turbo 約 2.2 GB），加上雙語字幕會超過 6 GB |
-| `medium` | 顯示卡 | 14.2% | 約 8 秒 | 比 turbo 慢又不比較準 |
-| `small`（只有 CPU 時的預設） | CPU | 19.1% | 約 21 秒 | 錯字多 |
+| `large-v3-turbo` (default with a GPU) | GPU | 12.3% | ~3.5 s | Mostly spelling, e.g. mixing up ร/ล ("ดังกล่าว" → "ดังกราว") |
+| `large-v3` | GPU | 8.3% | ~10 s | Most accurate, but live captions get slower; ~3.8 GB of video memory (turbo ~2.2 GB), more than 6 GB with bilingual captions |
+| `medium` | GPU | 14.2% | ~8 s | Slower than turbo and no more accurate |
+| `small` (CPU-only default) | CPU | 19.1% | ~21 s | Many mistakes |
 
-想讓泰文更準，可以在設定檔寫 `{ "gpu_models": { "th": "large-v3" } }`。
+For more accurate Thai, put `{ "gpu_models": { "th": "large-v3" } }` in the config file.
 
-改完下次按開始就會生效。第一次用新模型會先下載。
+Changes take effect the next time you press Start. A new model is downloaded the first time it is used.
 
-翻譯模型也可以換：`"translate_model"` 填 GGUF 檔的完整路徑。例如改用 Hy-MT2-1.8B 的 Q4_K_M 版，顯示記憶體從約 1.9 GB 降到 1.2 GB，但譯文錯得比較多（把「small key」翻成「小鎖」、「midterm」翻成「中期考試」）。
+The translation model can be changed too: set `"translate_model"` to the full path of a GGUF file. For example, the Q4_K_M build of Hy-MT2-1.8B cuts video memory from ~1.9 GB to 1.2 GB but makes more mistakes ("small key" became "小鎖" (small lock), "midterm" became "中期考試").
 
-## 疑難排解
+## Troubleshooting
 
-| 看到的訊息 | 怎麼辦 |
+| Message | What to do |
 |---|---|
-| 找不到本機轉文字程式 | 執行一次 `install.sh`，再按開始 |
-| 請切到要轉文字的分頁，點工具列上的圖示 | 回到播放錄音的分頁，點工具列圖示（不要按側邊欄的「開始」） |
-| 本機轉文字程式意外結束 | 看 `~/.cache/tab-transcriber/host.log` 的最後幾行 |
-| 翻譯模型還沒安裝 | 執行一次 `install.sh`（不要加 `--no-translate`），再打開雙語字幕 |
-| 翻譯模型啟動失敗 | 看 `~/.cache/tab-transcriber/llama-server.log` 的最後幾行 |
+| 找不到本機轉文字程式 (local speech-to-text program not found) | Run `install.sh` once, then press Start |
+| 請切到要轉文字的分頁，點工具列上的圖示 (switch to the tab to transcribe and click the toolbar icon) | Go back to the tab playing the audio and click the toolbar icon (not Start in the side panel) |
+| 本機轉文字程式意外結束 (local speech-to-text program exited unexpectedly) | Check the last lines of `~/.cache/tab-transcriber/host.log` |
+| 翻譯模型還沒安裝 (translation model not installed) | Run `install.sh` once (without `--no-translate`), then turn on bilingual captions |
+| 翻譯模型啟動失敗 (translation model failed to start) | Check the last lines of `~/.cache/tab-transcriber/llama-server.log` |
 
-## 移除
+## Uninstall
 
-1. 在 `brave://extensions` 移除 Tab Transcriber。
-2. 執行 `~/Desktop/tofel/tab-transcriber/uninstall.sh`（刪除登記檔）。
-3. 不需要的話，再刪掉這個資料夾、`~/.cache/tab-transcriber`（翻譯模型和紀錄檔），以及 `~/.cache/huggingface/hub` 裡的 `faster-whisper` 模型。
+1. Remove Tab Transcriber in `brave://extensions`.
+2. Run `./uninstall.sh` in this folder (removes the registration files).
+3. If you no longer need them, delete this folder, `~/.cache/tab-transcriber` (translation model and logs), and the `faster-whisper` models in `~/.cache/huggingface/hub`.
 
-## 開發
+## Development
 
 ```
-extension/   插件（Manifest V3）
-  background.js   錄音流程：tabCapture → 背景錄音頁 → 本機程式 → 寫進 storage
-  offscreen.js    錄分頁聲音、播回喇叭、降到 16 kHz、在停頓處切段
-  pcm-worklet.js  AudioWorklet，每 100 ms 交出一塊聲音
-  sidepanel.*     側邊欄
-  caption-overlay.js  網頁字幕：錄音中注入被錄的分頁，換頁後重新注入（所以要所有網站的權限），浮在網頁上的字幕框
-host/        本機轉文字程式（native messaging host，Python + faster-whisper，用 uv 管）
-  vendor/llama.cpp/  install.sh 下載的 llama.cpp（Vulkan 版），雙語字幕用它的 llama-server 跑翻譯模型，不進 git
-tests/e2e.mjs  端到端測試：headless Brave 載入插件、播錄音、模擬點圖示、檢查文字稿與雙語字幕
-tests/test_repeats.py  本機程式縮短重複、判斷狀聲詞的單元測試（不需要模型）
-tests/test_chunking.mjs  錄音頁切段的單元測試：背景一直有聲音時也要在句子停頓處切（不需要瀏覽器和模型）
-docs/research/ 選型筆記與速度量測
+extension/   The extension (Manifest V3)
+  background.js   Recording flow: tabCapture → offscreen recorder → local program → storage
+  offscreen.js    Captures tab audio, plays it back, resamples to 16 kHz, splits at pauses
+  pcm-worklet.js  AudioWorklet that hands over a 100 ms block of audio at a time
+  sidepanel.*     Side panel
+  caption-overlay.js  On-page captions: injected into the recorded tab, re-injected after page loads (hence the all-sites permission)
+host/        Local speech-to-text program (native messaging host, Python + faster-whisper, managed with uv)
+  vendor/llama.cpp/  llama.cpp (Vulkan build) downloaded by install.sh; runs the translation model via llama-server; not in git
+tests/e2e.mjs  End-to-end test: headless Brave loads the extension, plays audio, simulates the icon click, checks transcript and bilingual captions
+tests/test_repeats.py  Unit tests for shortening repeats and detecting interjections in the local program (no model needed)
+tests/test_chunking.mjs  Unit test for where the recorder splits audio, including with constant background sound (no browser or model needed)
+docs/research/ Research notes and measurements (in Chinese)
 ```
 
-測試（要先執行過 `install.sh`）：
+Tests (run `install.sh` first):
 
 ```bash
 C=docs/research/tab-transcription/corpus
@@ -152,4 +166,6 @@ host/.venv/bin/python -m unittest tests/test_repeats.py
 node tests/test_chunking.mjs
 ```
 
-插件 ID 固定為 `pclblnfmncjbohcnbhlkgefpdhpljiae`（由 `manifest.json` 的 `key` 決定），`install.sh` 的登記檔只允許這個 ID 連線。
+The extension ID is fixed at `pclblnfmncjbohcnbhlkgefpdhpljiae` (set by `key` in `manifest.json`); the registration file written by `install.sh` only allows this ID to connect.
+
+Test audio sources and licences are listed in [docs/research/tab-transcription/corpus/SOURCES.md](docs/research/tab-transcription/corpus/SOURCES.md).
