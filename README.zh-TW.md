@@ -18,9 +18,9 @@ Brave／Chrome 插件。把分頁正在播放的英文、日文或泰文錄音�
 
 ## 需要什麼
 
-- Linux x86-64（在 Ubuntu 測試）。翻譯用的 llama.cpp 下載的是 Ubuntu x64 版。
+- Linux x86-64（在 Ubuntu 測試），或 Windows 10／11 x64。Windows 版目前只在 GitHub 的 Windows 測試機上用 CPU 測過安裝和轉文字，還沒在有顯示卡的 Windows 電腦上實測。
 - Brave、Chrome 或 Chromium（在 Brave 155 測試）。
-- [uv](https://docs.astral.sh/uv/)（管 Python 環境）、curl。
+- [uv](https://docs.astral.sh/uv/)（管 Python 環境）、curl（Windows 10 起內建）、git（或在 GitHub 頁面按 Code → Download ZIP）。
 - 有 NVIDIA 顯示卡和驅動更好（在 RTX 2060 6 GB 測試）；沒有也能用 CPU 跑，比較慢。
 
 ## 安裝（只要做一次）
@@ -33,7 +33,15 @@ Brave／Chrome 插件。把分頁正在播放的英文、日文或泰文錄音�
    ./install.sh
    ```
 
-   這一步會建 Python 環境、下載 Whisper 模型和雙語字幕用的翻譯模型（約 2 GB），並在 Brave、Chrome 的設定資料夾登記「本機轉文字程式」的位置。偵測到 NVIDIA 驅動時，會另外裝顯示卡用的 CUDA 函式庫（約 2 GB）和 large-v3-turbo 模型（約 1.6 GB）。不需要雙語字幕的話，可以改成執行 `install.sh --no-translate`。
+   Windows 在 PowerShell 執行（沒有 uv 的話先 `winget install --id=astral-sh.uv -e`，裝好開新的 PowerShell）：
+
+   ```powershell
+   git clone https://github.com/EdwardLeeee/ai-realtime-speech-extension.git
+   cd ai-realtime-speech-extension
+   powershell -ExecutionPolicy Bypass -File install.ps1
+   ```
+
+   這一步會建 Python 環境、下載 Whisper 模型和雙語字幕用的翻譯模型（約 2 GB），並在 Brave、Chrome 的設定資料夾登記「本機轉文字程式」的位置。偵測到 NVIDIA 驅動時，會另外裝顯示卡用的 CUDA 函式庫（約 2 GB）和 large-v3-turbo 模型（約 1.6 GB）。不需要雙語字幕的話，可以改成執行 `install.sh --no-translate`（Windows：`install.ps1 -NoTranslate`）。Windows 的註冊寫在登錄檔（Brave、Chrome、Chromium、Edge 都會註冊）。
 
    從舊版更新的話，也要再執行一次 `install.sh`，才會下載翻譯模型。已經下載過的檔案會核對後跳過。
 
@@ -89,7 +97,7 @@ Brave／Chrome 插件。把分頁正在播放的英文、日文或泰文錄音�
 
 ## 換模型
 
-想換模型，可以新增 `~/.config/tab-transcriber/config.json`，只寫要改的部分。`gpu_models` 是有顯示卡時用的，`models` 是只有 CPU 時用的：
+想換模型，可以新增 `~/.config/tab-transcriber/config.json`（Windows：`%USERPROFILE%\.config\tab-transcriber\config.json`），只寫要改的部分。`gpu_models` 是有顯示卡時用的，`models` 是只有 CPU 時用的：
 
 ```json
 { "gpu_models": { "en": "medium.en" }, "models": { "ja": "medium" } }
@@ -126,14 +134,14 @@ Brave／Chrome 插件。把分頁正在播放的英文、日文或泰文錄音�
 |---|---|
 | 找不到本機轉文字程式 | 執行一次 `install.sh`，再按開始 |
 | 請切到要轉文字的分頁，點工具列上的圖示 | 回到播放錄音的分頁，點工具列圖示（不要按側邊欄的「開始」） |
-| 本機轉文字程式意外結束 | 看 `~/.cache/tab-transcriber/host.log` 的最後幾行 |
+| 本機轉文字程式意外結束 | 看 `~/.cache/tab-transcriber/host.log` 的最後幾行（Windows：`%USERPROFILE%\.cache\tab-transcriber\host.log`） |
 | 翻譯模型還沒安裝 | 執行一次 `install.sh`（不要加 `--no-translate`），再打開雙語字幕 |
 | 翻譯模型啟動失敗 | 看 `~/.cache/tab-transcriber/llama-server.log` 的最後幾行 |
 
 ## 移除
 
 1. 在 `brave://extensions` 移除 Tab Transcriber。
-2. 在這個資料夾執行 `./uninstall.sh`（刪除登記檔）。
+2. 在這個資料夾執行 `./uninstall.sh`（刪除登記檔；Windows：`powershell -ExecutionPolicy Bypass -File uninstall.ps1`）。
 3. 不需要的話，再刪掉這個資料夾、`~/.cache/tab-transcriber`（翻譯模型和紀錄檔），以及 `~/.cache/huggingface/hub` 裡的 `faster-whisper` 模型。
 
 ## 開發
@@ -150,6 +158,7 @@ host/        本機轉文字程式（native messaging host，Python + faster-whi
 tests/e2e.mjs  端到端測試：headless Brave 載入插件、播錄音、模擬點圖示、檢查文字稿與雙語字幕
 tests/test_repeats.py  本機程式縮短重複、判斷狀聲詞的單元測試（不需要模型）
 tests/test_chunking.mjs  錄音頁切段的單元測試：背景一直有聲音時也要在句子停頓處切（不需要瀏覽器和模型）
+tests/test_native_host.py  照瀏覽器的方式從註冊位置啟動本機程式、交換訊息（Linux、Windows 都能跑；GitHub Actions 在 Windows 上跑）
 docs/research/ 選型筆記與速度量測（中文）
 ```
 
@@ -162,6 +171,7 @@ node tests/e2e.mjs --audio $C/gongitsune-01.mp3 --start 60 --duration 40 --lang 
 node tests/e2e.mjs --audio $C/fleurs-th-dev.mp3 --start 0 --duration 84 --lang th --bilingual on
 host/.venv/bin/python -m unittest tests/test_repeats.py
 node tests/test_chunking.mjs
+host/.venv/bin/python tests/test_native_host.py   # Windows：host\.venv\Scripts\python.exe tests\test_native_host.py
 ```
 
 插件 ID 固定為 `pclblnfmncjbohcnbhlkgefpdhpljiae`（由 `manifest.json` 的 `key` 決定），`install.sh` 的登記檔只允許這個 ID 連線。

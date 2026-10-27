@@ -20,9 +20,9 @@ The extension's interface is in Traditional Chinese; this README gives the Chine
 
 ## Requirements
 
-- Linux x86-64 (tested on Ubuntu). The llama.cpp build downloaded for translation is the Ubuntu x64 build.
+- Linux x86-64 (tested on Ubuntu) or Windows 10/11 x64. The Windows version has so far only been tested on GitHub's Windows test machine (install and transcription on the CPU), not yet on a Windows PC with a GPU.
 - Brave, Chrome or Chromium (tested on Brave 155).
-- [uv](https://docs.astral.sh/uv/) (manages the Python environment) and curl.
+- [uv](https://docs.astral.sh/uv/) (manages the Python environment), curl (built into Windows 10 and later) and git (or use Code → Download ZIP on GitHub).
 - An NVIDIA GPU with drivers is recommended (tested on an RTX 2060 6 GB); it also works on the CPU, more slowly.
 
 ## Install (once)
@@ -35,7 +35,15 @@ The extension's interface is in Traditional Chinese; this README gives the Chine
    ./install.sh
    ```
 
-   This creates the Python environment, downloads the Whisper model and the translation model for bilingual captions (about 2 GB), and registers the local speech-to-text program with Brave and Chrome. If an NVIDIA driver is detected, it also installs the CUDA libraries for the GPU (about 2 GB) and the large-v3-turbo model (about 1.6 GB). If you don't need bilingual captions, run `./install.sh --no-translate` instead.
+   On Windows, in PowerShell (if you don't have uv yet, run `winget install --id=astral-sh.uv -e` and open a new PowerShell):
+
+   ```powershell
+   git clone https://github.com/EdwardLeeee/ai-realtime-speech-extension.git
+   cd ai-realtime-speech-extension
+   powershell -ExecutionPolicy Bypass -File install.ps1
+   ```
+
+   This creates the Python environment, downloads the Whisper model and the translation model for bilingual captions (about 2 GB), and registers the local speech-to-text program with Brave and Chrome. If an NVIDIA driver is detected, it also installs the CUDA libraries for the GPU (about 2 GB) and the large-v3-turbo model (about 1.6 GB). If you don't need bilingual captions, run `./install.sh --no-translate` instead (Windows: `install.ps1 -NoTranslate`). On Windows the registration goes into the registry (for Brave, Chrome, Chromium and Edge).
 
    When updating from an older version, run `install.sh` again so it can download anything new. Files that are already downloaded are verified and skipped.
 
@@ -91,7 +99,7 @@ Notes:
 
 ## Changing models
 
-To change models, create `~/.config/tab-transcriber/config.json` with only the parts you want to change. `gpu_models` is used with a GPU and `models` on CPU only:
+To change models, create `~/.config/tab-transcriber/config.json` (Windows: `%USERPROFILE%\.config\tab-transcriber\config.json`) with only the parts you want to change. `gpu_models` is used with a GPU and `models` on CPU only:
 
 ```json
 { "gpu_models": { "en": "medium.en" }, "models": { "ja": "medium" } }
@@ -128,14 +136,14 @@ The translation model can be changed too: set `"translate_model"` to the full pa
 |---|---|
 | 找不到本機轉文字程式 (local speech-to-text program not found) | Run `install.sh` once, then press Start |
 | 請切到要轉文字的分頁，點工具列上的圖示 (switch to the tab to transcribe and click the toolbar icon) | Go back to the tab playing the audio and click the toolbar icon (not Start in the side panel) |
-| 本機轉文字程式意外結束 (local speech-to-text program exited unexpectedly) | Check the last lines of `~/.cache/tab-transcriber/host.log` |
+| 本機轉文字程式意外結束 (local speech-to-text program exited unexpectedly) | Check the last lines of `~/.cache/tab-transcriber/host.log` (Windows: `%USERPROFILE%\.cache\tab-transcriber\host.log`) |
 | 翻譯模型還沒安裝 (translation model not installed) | Run `install.sh` once (without `--no-translate`), then turn on bilingual captions |
 | 翻譯模型啟動失敗 (translation model failed to start) | Check the last lines of `~/.cache/tab-transcriber/llama-server.log` |
 
 ## Uninstall
 
 1. Remove Tab Transcriber in `brave://extensions`.
-2. Run `./uninstall.sh` in this folder (removes the registration files).
+2. Run `./uninstall.sh` in this folder (removes the registration files; Windows: `powershell -ExecutionPolicy Bypass -File uninstall.ps1`).
 3. If you no longer need them, delete this folder, `~/.cache/tab-transcriber` (translation model and logs), and the `faster-whisper` models in `~/.cache/huggingface/hub`.
 
 ## Development
@@ -152,6 +160,7 @@ host/        Local speech-to-text program (native messaging host, Python + faste
 tests/e2e.mjs  End-to-end test: headless Brave loads the extension, plays audio, simulates the icon click, checks transcript and bilingual captions
 tests/test_repeats.py  Unit tests for shortening repeats and detecting interjections in the local program (no model needed)
 tests/test_chunking.mjs  Unit test for where the recorder splits audio, including with constant background sound (no browser or model needed)
+tests/test_native_host.py  Starts the local program from its registration like a browser would and exchanges messages (Linux and Windows; GitHub Actions runs it on Windows)
 docs/research/ Research notes and measurements (in Chinese)
 ```
 
@@ -164,6 +173,7 @@ node tests/e2e.mjs --audio $C/gongitsune-01.mp3 --start 60 --duration 40 --lang 
 node tests/e2e.mjs --audio $C/fleurs-th-dev.mp3 --start 0 --duration 84 --lang th --bilingual on
 host/.venv/bin/python -m unittest tests/test_repeats.py
 node tests/test_chunking.mjs
+host/.venv/bin/python tests/test_native_host.py   # Windows: host\.venv\Scripts\python.exe tests\test_native_host.py
 ```
 
 The extension ID is fixed at `pclblnfmncjbohcnbhlkgefpdhpljiae` (set by `key` in `manifest.json`); the registration file written by `install.sh` only allows this ID to connect.

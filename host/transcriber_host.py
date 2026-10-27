@@ -23,6 +23,7 @@
 import base64
 import json
 import logging
+import os
 import re
 import shutil
 import socket
@@ -40,7 +41,15 @@ SAMPLE_RATE = 16000
 CONFIG_PATH = Path.home() / ".config" / "tab-transcriber" / "config.json"
 CACHE_DIR = Path.home() / ".cache" / "tab-transcriber"
 LOG_PATH = CACHE_DIR / "host.log"
-LLAMA_SERVER = Path(__file__).resolve().parent / "vendor" / "llama.cpp" / "llama-server"  # install.sh 下載
+WINDOWS = sys.platform == "win32"
+# install.sh（Windows 是 install.ps1）下載
+LLAMA_SERVER = Path(__file__).resolve().parent / "vendor" / "llama.cpp" / ("llama-server.exe" if WINDOWS else "llama-server")
+INSTALLER = "install.ps1" if WINDOWS else "install.sh"
+if WINDOWS:
+    # 有裝 gpu 選配時，讓 CTranslate2 找得到 pip 裝的 CUDA 12 cuBLAS／cuDNN 9（Linux 是 run_host.sh 設 LD_LIBRARY_PATH）
+    for _lib in (Path(sys.prefix) / "Lib" / "site-packages" / "nvidia").glob("*/bin"):
+        os.add_dll_directory(str(_lib))
+        os.environ["PATH"] = f"{_lib}{os.pathsep}{os.environ.get('PATH', '')}"
 LANGUAGES = ("en", "ja", "th")
 DEFAULT_CONFIG = {
     # CPU 用的模型；速度與準確度見 docs/research/2026-10-tab-transcription.md
@@ -98,6 +107,8 @@ MAX_UNIT_SEGMENTS = 3  # 最多湊三段就翻，免得一直等不到句號
 HOLD_S = 6.0  # 等不到下一段定稿就先翻手上的半句
 
 # stdout 只能拿來傳訊息；函式庫印的東西一律改去 stderr，以免弄壞通訊格式。
+if sys.stderr is None:  # 瀏覽器啟動時可能沒給 stderr
+    sys.stderr = open(os.devnull, "w")
 _out = sys.stdout.buffer
 _in = sys.stdin.buffer
 _send_lock = threading.Lock()  # 翻譯執行緒也會送訊息
@@ -406,7 +417,7 @@ class Translator:
         if not LLAMA_SERVER.exists() or not model.exists():
             missing = LLAMA_SERVER if not LLAMA_SERVER.exists() else model
             log.error("translator missing: %s", missing)
-            self._give_up("翻譯模型還沒安裝，請在終端機執行一次 tab-transcriber/install.sh。")
+            self._give_up(f"翻譯模型還沒安裝，請在終端機執行一次 tab-transcriber/{INSTALLER}。")
             return
         send({"type": "translator", "state": "loading"})
         gpu_layers = int(self.config["translate_gpu_layers"])
@@ -440,9 +451,13 @@ class Translator:
             cmd = ["setpriv", "--pdeathsig", "TERM", "--", *cmd]
         logfile = open(CACHE_DIR / "llama-server.log", "wb")
         try:
-            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=logfile, stderr=subprocess.STDOUT)
+            # Windows：瀏覽器啟動的本機程式沒有主控台，不加 CREATE_NO_WINDOW 的話 llama-server 會自己開一個黑色視窗
+            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=logfile, stderr=subprocess.STDOUT,
+                                    creationflags=subprocess.CREATE_NO_WINDOW if WINDOWS else 0)
         finally:
             logfile.close()
+        if WINDOWS:
+            kill_with_host(proc)
         return proc, port
 
     def _wait_ready(self, proc, port, generation):
@@ -505,6 +520,45 @@ class Translator:
             proc.wait()
 
 
+_job = None
+
+
+def kill_with_host(proc):
+    """Windows：把 llama-server 放進設了 KILL_ON_JOB_CLOSE 的 job。本機程式被強制結束、job handle 關掉時，
+    系統會一起收掉它，不會留在背景佔顯示記憶體（Linux 是 setpriv 的 pdeathsig）。"""
+    global _job
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    if _job is None:
+        class BasicLimit(ctypes.Structure):  # JOBOBJECT_BASIC_LIMIT_INFORMATION
+            _fields_ = [("per_process_time", ctypes.c_longlong), ("per_job_time", ctypes.c_longlong),
+                        ("flags", wintypes.DWORD), ("min_working_set", ctypes.c_size_t),
+                        ("max_working_set", ctypes.c_size_t), ("active_processes", wintypes.DWORD),
+                        ("affinity", ctypes.c_size_t), ("priority_class", wintypes.DWORD),
+                        ("scheduling_class", wintypes.DWORD)]
+
+        class ExtendedLimit(ctypes.Structure):  # JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+            _fields_ = [("basic", BasicLimit), ("io", ctypes.c_ulonglong * 6), ("process_memory", ctypes.c_size_t),
+                        ("job_memory", ctypes.c_size_t), ("peak_process_memory", ctypes.c_size_t),
+                        ("peak_job_memory", ctypes.c_size_t)]
+
+        job = kernel32.CreateJobObjectW(None, None)
+        info = ExtendedLimit()
+        info.basic.flags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        # 9 = JobObjectExtendedLimitInformation
+        if not job or not kernel32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+            log.warning("job object setup failed: %s", ctypes.get_last_error())
+            return
+        _job = job
+    if not kernel32.AssignProcessToJobObject(_job, proc._handle):
+        log.warning("AssignProcessToJobObject failed: %s", ctypes.get_last_error())
+
+
 def incoming(first):
     """第一則已經讀過了：不是 start 的話（舊版插件）也要當一般訊息處理。"""
     if first.get("type") != "start":
@@ -516,7 +570,7 @@ def incoming(first):
 def main():
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
-        filename=LOG_PATH, level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+        filename=LOG_PATH, encoding="utf-8", level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
     config = load_config()
     send({"type": "status", "state": "loading"})

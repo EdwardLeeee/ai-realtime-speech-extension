@@ -399,7 +399,7 @@ async function closeOffscreen() {
 function explain(err) {
   const text = err?.message ?? String(err);
   if (/native messaging host not found/i.test(text)) {
-    return '找不到本機轉文字程式。請先在終端機執行 tab-transcriber/install.sh，再按開始。';
+    return '找不到本機轉文字程式。請先在終端機執行 tab-transcriber/install.sh（Windows 是 install.ps1），再按開始。';
   }
   if (/not been invoked|activeTab/i.test(text)) {
     return '請切到要轉文字的分頁，點工具列上的 Tab Transcriber 圖示開始（換過網頁要再點一次）。';
