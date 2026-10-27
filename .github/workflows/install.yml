@@ -2,6 +2,8 @@
 #   unit     Linux，不需要模型的單元測試
 #   macos    Apple Silicon，install.sh → 照瀏覽器的方式啟動本機程式轉文字、翻譯（tests/test_native_host.py）
 #   windows  編出 TabTranscriberSetup.exe → 靜默安裝 → 同一個測試 → 解除安裝；推 v* tag 時把 Setup.exe 放上 Release
+#            這裡的步驟用 pwsh：Windows PowerShell 5.1 會把沒有 BOM 的步驟腳本當系統字碼頁讀，中文字串會壞掉。
+#            Setup.exe 執行 install.ps1 時照樣用使用者電腦上的 Windows PowerShell 5.1。
 # 測試機都沒有 NVIDIA 顯示卡，Whisper 用 CPU 跑。
 name: install
 on:
@@ -45,7 +47,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
       - name: 編譯 Setup.exe
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'  # 原生程式寫 stderr 不算失敗，只看結束碼
           choco install innosetup -y --no-progress | Out-Null
@@ -58,7 +60,7 @@ jobs:
           name: TabTranscriberSetup
           path: installer/Output/TabTranscriberSetup.exe
       - name: 靜默安裝（和使用者點兩下 Setup.exe 一樣執行 install.ps1）
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'  # 原生程式寫 stderr 不算失敗，只看結束碼
           $p = Start-Process installer\Output\TabTranscriberSetup.exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/LOG=setup.log' -Wait -PassThru
@@ -66,7 +68,7 @@ jobs:
           Get-Content "$env:LOCALAPPDATA\Programs\TabTranscriber\install.log" -Tail 30 -ErrorAction SilentlyContinue
           if ($p.ExitCode -ne 0) { throw "Setup.exe 結束碼 $($p.ExitCode)" }
       - name: 本機程式（native messaging）
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'  # 原生程式寫 stderr 不算失敗，只看結束碼
           $py = "$env:LOCALAPPDATA\Programs\TabTranscriber\host\.venv\Scripts\python.exe"
@@ -76,10 +78,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw '單元測試失敗' }
       - name: host.log
         if: always()
-        shell: powershell
+        shell: pwsh
         run: Get-Content "$HOME\.cache\tab-transcriber\host.log" -Tail 40 -ErrorAction SilentlyContinue; Get-Content "$HOME\.cache\tab-transcriber\llama-server.log" -Tail 20 -ErrorAction SilentlyContinue
       - name: 解除安裝
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'  # 原生程式寫 stderr 不算失敗，只看結束碼
           $p = Start-Process "$env:LOCALAPPDATA\Programs\TabTranscriber\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait -PassThru
@@ -88,7 +90,7 @@ jobs:
           if (Test-Path "$env:LOCALAPPDATA\Programs\TabTranscriber\host\.venv") { throw '.venv 沒有刪掉' }
       - name: 放上 Release（只有推 v* tag 時）
         if: startsWith(github.ref, 'refs/tags/v')
-        shell: powershell
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
