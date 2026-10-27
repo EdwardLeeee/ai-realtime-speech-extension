@@ -4,6 +4,10 @@
 
 Brave／Chrome 插件。把分頁正在播放的英文、日文或泰文錄音（練習網站、YouTube、Twitch、Podcast 網頁……）轉成每句附時間的文字稿，可以再加上繁體中文的雙語字幕：
 
+![實際錄音畫面：左邊是播放中的影片，下方浮著網頁字幕（上一句和正在講的這一句，各附中文翻譯）；右邊是側邊欄的雙語文字稿和專有名詞欄位](docs/images/demo.png)
+
+<sub>實測畫面（RTX 2060，large-v3-turbo，雙語字幕開著）。畫面中的影片：*Tears of Steel* © Blender Foundation | [mango.blender.org](https://mango.blender.org)，[CC BY 3.0](https://creativecommons.org/licenses/by/3.0/)。</sub>
+
 ```
 [00:00] They must go by the mail, she thought, and how funny it'll seem to send shoes to one's own feet, how odd the address will look.
         她想，他們必須通過郵寄的方式來送東西。把鞋子寄到自己腳邊，會有多有趣啊！而地址的寫法也一定會很奇怪吧。

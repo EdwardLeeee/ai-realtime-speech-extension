@@ -4,6 +4,10 @@ English | [繁體中文](README.zh-TW.md)
 
 A Brave/Chrome extension that turns English, Japanese or Thai audio playing in a browser tab (practice sites, YouTube, Twitch, podcast pages…) into a timestamped transcript with live captions, and can add Traditional Chinese translations underneath:
 
+![Live recording: the playing video on the left with on-page captions floating below it (previous and current sentence, each with a Chinese translation); the side panel on the right with the bilingual transcript and the proper-noun field](docs/images/demo.png)
+
+<sub>Real screenshot (RTX 2060, large-v3-turbo, bilingual captions on). Video shown: *Tears of Steel* © Blender Foundation | [mango.blender.org](https://mango.blender.org), [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/).</sub>
+
 ```
 [00:00] They must go by the mail, she thought, and how funny it'll seem to send shoes to one's own feet, how odd the address will look.
         她想，他們必須通過郵寄的方式來送東西。把鞋子寄到自己腳邊，會有多有趣啊！而地址的寫法也一定會很奇怪吧。
