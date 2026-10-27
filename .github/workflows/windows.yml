@@ -4,7 +4,9 @@ on:
   push:
     paths:
       - install.ps1
+      - install.cmd
       - uninstall.ps1
+      - uninstall.cmd
       - host/**
       - tests/test_native_host.py
       - .github/workflows/windows.yml
@@ -16,9 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - name: install.ps1
-        shell: powershell
-        run: powershell -ExecutionPolicy Bypass -File install.ps1
+      - name: install.cmd（等於在檔案總管點兩下）
+        shell: cmd
+        run: install.cmd
       - name: 本機程式（native messaging）
         shell: powershell
         run: host\.venv\Scripts\python.exe tests\test_native_host.py
@@ -26,8 +28,11 @@ jobs:
         if: always()
         shell: powershell
         run: Get-Content "$HOME\.cache\tab-transcriber\host.log" -Tail 40 -ErrorAction SilentlyContinue; Get-Content "$HOME\.cache\tab-transcriber\llama-server.log" -Tail 20 -ErrorAction SilentlyContinue
-      - name: uninstall.ps1
+      - name: 單元測試
+        shell: powershell
+        run: host\.venv\Scripts\python.exe -m unittest tests/test_repeats.py tests/test_hints.py
+      - name: uninstall.cmd
         shell: powershell
         run: |
-          powershell -ExecutionPolicy Bypass -File uninstall.ps1
+          cmd /c uninstall.cmd
           if (Test-Path 'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.tab_transcriber.host') { throw '登錄檔沒有移除' }

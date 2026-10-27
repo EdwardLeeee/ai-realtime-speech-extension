@@ -33,13 +33,7 @@ Brave／Chrome 插件。把分頁正在播放的英文、日文或泰文錄音�
    ./install.sh
    ```
 
-   Windows 在 PowerShell 執行（沒有 uv 的話先 `winget install --id=astral-sh.uv -e`，裝好開新的 PowerShell）：
-
-   ```powershell
-   git clone https://github.com/EdwardLeeee/ai-realtime-speech-extension.git
-   cd ai-realtime-speech-extension
-   powershell -ExecutionPolicy Bypass -File install.ps1
-   ```
+   Windows：在 GitHub 頁面按 Code → Download ZIP 解壓縮（或用 git clone），在資料夾裡**點兩下 `install.cmd`**。沒有 uv 的話它會先幫你裝（用 winget；沒有 winget 就用 uv 官方的安裝程式）。也可以在 PowerShell 執行 `powershell -ExecutionPolicy Bypass -File install.ps1`。
 
    這一步會建 Python 環境、下載 Whisper 模型和雙語字幕用的翻譯模型（約 2 GB），並在 Brave、Chrome 的設定資料夾登記「本機轉文字程式」的位置。偵測到 NVIDIA 驅動時，會另外裝顯示卡用的 CUDA 函式庫（約 2 GB）和 large-v3-turbo 模型（約 1.6 GB）。不需要雙語字幕的話，可以改成執行 `install.sh --no-translate`（Windows：`install.ps1 -NoTranslate`）。Windows 的註冊寫在登錄檔（Brave、Chrome、Chromium、Edge 都會註冊）。
 
@@ -148,7 +142,7 @@ Brave／Chrome 插件。把分頁正在播放的英文、日文或泰文錄音�
 ## 移除
 
 1. 在 `brave://extensions` 移除 Tab Transcriber。
-2. 在這個資料夾執行 `./uninstall.sh`（刪除登記檔；Windows：`powershell -ExecutionPolicy Bypass -File uninstall.ps1`）。
+2. 在這個資料夾執行 `./uninstall.sh`（刪除登記檔；Windows：點兩下 `uninstall.cmd`）。
 3. 不需要的話，再刪掉這個資料夾、`~/.cache/tab-transcriber`（翻譯模型和紀錄檔），以及 `~/.cache/huggingface/hub` 裡的 `faster-whisper` 模型。
 
 ## 開發

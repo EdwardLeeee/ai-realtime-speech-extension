@@ -35,13 +35,7 @@ The extension's interface is in Traditional Chinese; this README gives the Chine
    ./install.sh
    ```
 
-   On Windows, in PowerShell (if you don't have uv yet, run `winget install --id=astral-sh.uv -e` and open a new PowerShell):
-
-   ```powershell
-   git clone https://github.com/EdwardLeeee/ai-realtime-speech-extension.git
-   cd ai-realtime-speech-extension
-   powershell -ExecutionPolicy Bypass -File install.ps1
-   ```
+   On Windows: download the repository (Code → Download ZIP on GitHub, then extract; or git clone) and **double-click `install.cmd`** in the folder. If uv is missing it installs it first (with winget, or uv's official installer if winget isn't available). You can also run `powershell -ExecutionPolicy Bypass -File install.ps1` in PowerShell.
 
    This creates the Python environment, downloads the Whisper model and the translation model for bilingual captions (about 2 GB), and registers the local speech-to-text program with Brave and Chrome. If an NVIDIA driver is detected, it also installs the CUDA libraries for the GPU (about 2 GB) and the large-v3-turbo model (about 1.6 GB). If you don't need bilingual captions, run `./install.sh --no-translate` instead (Windows: `install.ps1 -NoTranslate`). On Windows the registration goes into the registry (for Brave, Chrome, Chromium and Edge).
 
@@ -150,7 +144,7 @@ The translation model can be changed too: set `"translate_model"` to the full pa
 ## Uninstall
 
 1. Remove Tab Transcriber in `brave://extensions`.
-2. Run `./uninstall.sh` in this folder (removes the registration files; Windows: `powershell -ExecutionPolicy Bypass -File uninstall.ps1`).
+2. Run `./uninstall.sh` in this folder (removes the registration files; Windows: double-click `uninstall.cmd`).
 3. If you no longer need them, delete this folder, `~/.cache/tab-transcriber` (translation model and logs), and the `faster-whisper` models in `~/.cache/huggingface/hub`.
 
 ## Development
