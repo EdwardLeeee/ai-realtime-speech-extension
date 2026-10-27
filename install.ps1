@@ -1,5 +1,5 @@
 ﻿# 安裝本機轉文字程式（Windows）：建 Python 環境、先下載 Whisper 模型與雙語字幕用的翻譯模型、向 Brave／Chrome／Edge 註冊 native messaging host。
-# 用法：powershell -ExecutionPolicy Bypass -File install.ps1
+# 用法：Setup.exe 安裝時會自動執行它；或點兩下 install.cmd；或 powershell -ExecutionPolicy Bypass -File install.ps1
 #       powershell -ExecutionPolicy Bypass -File install.ps1 -NoTranslate   不下載翻譯模型（約 2 GB）；之後打開雙語字幕會提示再執行一次
 # Windows PowerShell 5.1 讀沒有 BOM 的 .ps1 會當成系統字碼頁，所以這個檔案存成 UTF-8 加 BOM。
 param([switch]$NoTranslate)
@@ -19,15 +19,28 @@ $MtUrl = 'https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/main/Hy-MT2-1.
 $MtSha256 = '5c3fe0b1408a5ceb0143184ef247b11b579c525f4b02b060e6c851bb76fef1a4'
 $MtPath = Join-Path $HOME '.cache\tab-transcriber\models\Hy-MT2-1.8B-Q8_0.gguf'
 
-if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-  Write-Host '需要先安裝 uv：https://docs.astral.sh/uv/（例如 winget install --id=astral-sh.uv -e），裝好後開新的終端機再執行一次。'
-  exit 1
-}
+# 安裝過程另外記一份在 install.log（Setup.exe 失敗時請使用者看這個檔）
+Start-Transcript -Path (Join-Path $Root 'install.log') -Force | Out-Null
 
 # 原生程式寫到 stderr 的進度訊息不算錯誤（PowerShell 5.1 在 Stop 模式下會把它當成例外），只看 $LASTEXITCODE。
 function Invoke-Native([scriptblock]$Command) {
   $ErrorActionPreference = 'Continue'
   & $Command
+}
+
+# 沒有 uv 就先裝：有 winget 用 winget，沒有就用 uv 官方的安裝程式；裝好的位置加進這次的 PATH。
+if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+  Write-Host '找不到 uv，先安裝 uv…'
+  if (Get-Command winget -ErrorAction SilentlyContinue) {
+    Invoke-Native { winget install --id=astral-sh.uv -e --accept-source-agreements --accept-package-agreements }
+  }
+  $env:PATH = "$env:LOCALAPPDATA\Microsoft\WinGet\Links;$HOME\.local\bin;$env:PATH"
+  if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    Invoke-Native { powershell -NoProfile -ExecutionPolicy Bypass -Command 'irm https://astral.sh/uv/install.ps1 | iex' }
+  }
+  if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    throw '沒辦法自動安裝 uv。請照 https://docs.astral.sh/uv/ 安裝後再執行一次。'
+  }
 }
 
 # 下載到 .part，核對 SHA-256 才改成正式檔名；已經有而且核對正確就跳過。用 Windows 10 起內建的 curl.exe，可以續傳。
@@ -98,3 +111,4 @@ foreach ($browser in 'BraveSoftware\Brave-Browser', 'Google\Chrome', 'Chromium',
   Write-Host "已註冊：$key"
 }
 Write-Host "完成。接著在瀏覽器的擴充功能頁載入 $(Join-Path $Root 'extension')（見 README.md）。"
+Stop-Transcript | Out-Null

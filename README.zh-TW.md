@@ -18,30 +18,56 @@ Brave／Chrome 插件。把分頁正在播放的英文、日文或泰文錄音�
 
 ## 需要什麼
 
-- Linux x86-64（在 Ubuntu 測試），或 Windows 10／11 x64。Windows 版目前只在 GitHub 的 Windows 測試機上用 CPU 測過安裝和轉文字，還沒在有顯示卡的 Windows 電腦上實測。
-- Brave、Chrome 或 Chromium（在 Brave 155 測試）。
-- [uv](https://docs.astral.sh/uv/)（管 Python 環境）、curl（Windows 10 起內建）、git（或在 GitHub 頁面按 Code → Download ZIP）。
-- 有 NVIDIA 顯示卡和驅動更好（在 RTX 2060 6 GB 測試）；沒有也能用 CPU 跑，比較慢。
+- Windows 10／11 x64、macOS 14 以上的 Apple Silicon Mac（M1 以後），或 Linux x86-64。
+  - 作者實際在 Ubuntu（RTX 2060 6 GB）上使用。
+  - Windows 和 macOS 版目前只在 GitHub 的測試機上測過安裝、轉文字和翻譯（沒有獨立顯示卡，用 CPU），還沒在使用者的電腦上實測。
+- Brave、Chrome、Chromium 或 Edge（在 Brave 155 測試）。
+- 有 NVIDIA 顯示卡（Windows、Linux）會快很多，用 large-v3-turbo 模型；沒有就用 CPU 跑 small 模型，比較慢、錯字也比較多。Mac 的 Whisper 只能用 CPU，翻譯模型會用 Mac 的顯示晶片。
 
 ## 安裝（只要做一次）
 
-1. 在終端機執行：
+### 1. 安裝本機轉文字程式
 
-   ```bash
-   git clone https://github.com/EdwardLeeee/ai-realtime-speech-extension.git
-   cd ai-realtime-speech-extension
-   ./install.sh
-   ```
+**Windows**：下載 **[TabTranscriberSetup.exe](https://github.com/EdwardLeeee/ai-realtime-speech-extension/releases/latest/download/TabTranscriberSetup.exe)**，點兩下，照畫面按下一步。
 
-   Windows：在 GitHub 頁面按 Code → Download ZIP 解壓縮（或用 git clone），在資料夾裡**點兩下 `install.cmd`**。沒有 uv 的話它會先幫你裝（用 winget；沒有 winget 就用 uv 官方的安裝程式）。也可以在 PowerShell 執行 `powershell -ExecutionPolicy Bypass -File install.ps1`。
+- 不需要系統管理員權限，也不用先裝其他東西（會自動裝好 Python 環境用的 uv）。
+- 安裝時會另外開一個視窗顯示下載進度：Whisper 和翻譯模型共 2–5 GB，第一次約 5–15 分鐘。
+- 安裝檔沒有付費的程式碼簽章，Windows 可能會跳出「Windows 已保護您的電腦」：按「其他資訊」→「仍要執行」。
+- 之後可以在「設定 → 應用程式」解除安裝。
 
-   這一步會建 Python 環境、下載 Whisper 模型和雙語字幕用的翻譯模型（約 2 GB），並在 Brave、Chrome 的設定資料夾登記「本機轉文字程式」的位置。偵測到 NVIDIA 驅動時，會另外裝顯示卡用的 CUDA 函式庫（約 2 GB）和 large-v3-turbo 模型（約 1.6 GB）。不需要雙語字幕的話，可以改成執行 `install.sh --no-translate`（Windows：`install.ps1 -NoTranslate`）。Windows 的註冊寫在登錄檔（Brave、Chrome、Chromium、Edge 都會註冊）。
+**macOS**：打開「終端機」，貼上：
 
-   從舊版更新的話，也要再執行一次 `install.sh`，才會下載翻譯模型。已經下載過的檔案會核對後跳過。
+```bash
+command -v uv || curl -LsSf https://astral.sh/uv/install.sh | sh   # 沒有 uv 就先裝
+git clone https://github.com/EdwardLeeee/ai-realtime-speech-extension.git ~/ai-realtime-speech-extension
+~/ai-realtime-speech-extension/install.sh
+```
 
-2. 在 Brave 網址列打開 `brave://extensions`（Chrome 用 `chrome://extensions`）。
-3. 打開右上角的「開發人員模式」。
-4. 按「載入未封裝項目」，選這個資料夾裡的 `extension` 資料夾。插件會要「讀取和變更所有網站上的資料」的權限，只用來在換頁後把網頁字幕放回被錄的分頁。
+（第一次用 git 時，Mac 會問要不要安裝「命令列開發者工具」，按安裝。）
+
+**Linux**：
+
+```bash
+git clone https://github.com/EdwardLeeee/ai-realtime-speech-extension.git
+cd ai-realtime-speech-extension
+./install.sh
+```
+
+需要先裝 [uv](https://docs.astral.sh/uv/) 和 curl。
+
+這一步會建 Python 環境、下載 Whisper 模型和雙語字幕用的翻譯模型（約 2 GB），並向 Brave、Chrome 登記「本機轉文字程式」的位置。偵測到 NVIDIA 驅動時，會另外裝顯示卡用的 CUDA 函式庫（約 2 GB）和 large-v3-turbo 模型（約 1.6 GB）。不需要雙語字幕的話，可以改成執行 `install.sh --no-translate`（Windows 不用安裝檔時：`install.ps1 -NoTranslate`）。
+
+從舊版更新：Windows 重新執行新版的安裝檔；macOS、Linux 在資料夾裡 `git pull` 後再執行一次 `install.sh`。已經下載過的檔案會核對後跳過。
+
+### 2. 在瀏覽器載入插件
+
+1. 在 Brave 網址列打開 `brave://extensions`（Chrome 用 `chrome://extensions`，Edge 用 `edge://extensions`）。
+2. 打開右上角的「開發人員模式」。
+3. 按「載入未封裝項目」，選安裝資料夾裡的 `extension` 資料夾：
+   - Windows：安裝檔最後一頁會顯示路徑並打開資料夾（`%LOCALAPPDATA%\Programs\TabTranscriber\extension`）。
+   - macOS：`~/ai-realtime-speech-extension/extension`（在選檔視窗按 ⌘⇧G 可以直接貼路徑）。
+   - Linux：clone 下來的資料夾裡的 `extension`。
+4. 插件會要「讀取和變更所有網站上的資料」的權限，只用來在換頁後把網頁字幕放回被錄的分頁。
 5. 按工具列的拼圖圖示，把 **Tab Transcriber** 釘選到工具列。
 
 ## 使用
@@ -142,7 +168,7 @@ Brave／Chrome 插件。把分頁正在播放的英文、日文或泰文錄音�
 ## 移除
 
 1. 在 `brave://extensions` 移除 Tab Transcriber。
-2. 在這個資料夾執行 `./uninstall.sh`（刪除登記檔；Windows：點兩下 `uninstall.cmd`）。
+2. Windows：在「設定 → 應用程式」解除安裝 Tab Transcriber。macOS、Linux：在資料夾裡執行 `./uninstall.sh`（刪除登記檔）。
 3. 不需要的話，再刪掉這個資料夾、`~/.cache/tab-transcriber`（翻譯模型和紀錄檔），以及 `~/.cache/huggingface/hub` 裡的 `faster-whisper` 模型。
 
 ## 開發
@@ -161,6 +187,9 @@ tests/test_repeats.py  本機程式縮短重複、判斷狀聲詞的單元測試
 tests/test_hints.py  專有名詞放進 Whisper 提示的規則（只用 tokenizer）
 tests/test_chunking.mjs  錄音頁切段的單元測試：背景一直有聲音時也要在句子停頓處切（不需要瀏覽器和模型）
 tests/test_native_host.py  照瀏覽器的方式從註冊位置啟動本機程式、交換訊息（Linux、Windows 都能跑；GitHub Actions 在 Windows 上跑）
+install.sh     Linux、macOS 的安裝；install.ps1 是 Windows 的（install.cmd 點兩下執行它）
+installer/TabTranscriber.iss  Windows 安裝檔（Inno Setup）：複製檔案後執行 install.ps1；GitHub Actions 編譯，推 v* tag 時放上 Release
+.github/workflows/install.yml  Linux 單元測試、macOS 和 Windows 的安裝測試（Windows 是編出 Setup.exe 再靜默安裝）
 docs/research/ 選型筆記與速度量測（中文）
 ```
 

@@ -20,30 +20,56 @@ The extension's interface is in Traditional Chinese; this README gives the Chine
 
 ## Requirements
 
-- Linux x86-64 (tested on Ubuntu) or Windows 10/11 x64. The Windows version has so far only been tested on GitHub's Windows test machine (install and transcription on the CPU), not yet on a Windows PC with a GPU.
-- Brave, Chrome or Chromium (tested on Brave 155).
-- [uv](https://docs.astral.sh/uv/) (manages the Python environment), curl (built into Windows 10 and later) and git (or use Code → Download ZIP on GitHub).
-- An NVIDIA GPU with drivers is recommended (tested on an RTX 2060 6 GB); it also works on the CPU, more slowly.
+- Windows 10/11 x64, an Apple Silicon Mac (M1 or later) with macOS 14+, or Linux x86-64.
+  - The author uses it on Ubuntu (RTX 2060 6 GB).
+  - The Windows and macOS versions have so far only been tested on GitHub's test machines (install, transcription and translation on the CPU, no discrete GPU), not yet on users' computers.
+- Brave, Chrome, Chromium or Edge (tested on Brave 155).
+- An NVIDIA GPU (Windows, Linux) makes it much faster and enables the large-v3-turbo model; without one the small model runs on the CPU, slower and with more mistakes. On a Mac, Whisper runs on the CPU and the translation model uses the Mac's GPU.
 
 ## Install (once)
 
-1. In a terminal:
+### 1. Install the local speech-to-text program
 
-   ```bash
-   git clone https://github.com/EdwardLeeee/ai-realtime-speech-extension.git
-   cd ai-realtime-speech-extension
-   ./install.sh
-   ```
+**Windows**: download **[TabTranscriberSetup.exe](https://github.com/EdwardLeeee/ai-realtime-speech-extension/releases/latest/download/TabTranscriberSetup.exe)**, double-click it and click through the wizard.
 
-   On Windows: download the repository (Code → Download ZIP on GitHub, then extract; or git clone) and **double-click `install.cmd`** in the folder. If uv is missing it installs it first (with winget, or uv's official installer if winget isn't available). You can also run `powershell -ExecutionPolicy Bypass -File install.ps1` in PowerShell.
+- No administrator rights or other software needed (it installs uv, which manages the Python environment, by itself).
+- A separate window shows download progress: the Whisper and translation models are 2–5 GB, about 5–15 minutes the first time.
+- The installer isn't code-signed, so Windows may show "Windows protected your PC": click "More info" → "Run anyway".
+- Uninstall later from Settings → Apps.
 
-   This creates the Python environment, downloads the Whisper model and the translation model for bilingual captions (about 2 GB), and registers the local speech-to-text program with Brave and Chrome. If an NVIDIA driver is detected, it also installs the CUDA libraries for the GPU (about 2 GB) and the large-v3-turbo model (about 1.6 GB). If you don't need bilingual captions, run `./install.sh --no-translate` instead (Windows: `install.ps1 -NoTranslate`). On Windows the registration goes into the registry (for Brave, Chrome, Chromium and Edge).
+**macOS**: open Terminal and paste:
 
-   When updating from an older version, run `install.sh` again so it can download anything new. Files that are already downloaded are verified and skipped.
+```bash
+command -v uv || curl -LsSf https://astral.sh/uv/install.sh | sh   # install uv if missing
+git clone https://github.com/EdwardLeeee/ai-realtime-speech-extension.git ~/ai-realtime-speech-extension
+~/ai-realtime-speech-extension/install.sh
+```
 
-2. Open `brave://extensions` in Brave (`chrome://extensions` in Chrome).
-3. Turn on "Developer mode" in the top right.
-4. Click "Load unpacked" and choose the `extension` folder inside this folder. The extension asks for permission to "read and change all your data on all websites"; it only uses it to put the on-page captions back on the recorded tab after the page changes.
+(The first time you use git, macOS asks to install the "command line developer tools"; click Install.)
+
+**Linux**:
+
+```bash
+git clone https://github.com/EdwardLeeee/ai-realtime-speech-extension.git
+cd ai-realtime-speech-extension
+./install.sh
+```
+
+Requires [uv](https://docs.astral.sh/uv/) and curl.
+
+This creates the Python environment, downloads the Whisper model and the translation model for bilingual captions (about 2 GB), and registers the local speech-to-text program with Brave and Chrome. If an NVIDIA driver is detected, it also installs the CUDA libraries for the GPU (about 2 GB) and the large-v3-turbo model (about 1.6 GB). If you don't need bilingual captions, run `./install.sh --no-translate` instead (on Windows without the installer: `install.ps1 -NoTranslate`).
+
+Updating: on Windows, run the new installer; on macOS and Linux, `git pull` in the folder and run `install.sh` again. Files that are already downloaded are verified and skipped.
+
+### 2. Load the extension in the browser
+
+1. Open `brave://extensions` in Brave (`chrome://extensions` in Chrome, `edge://extensions` in Edge).
+2. Turn on "Developer mode" in the top right.
+3. Click "Load unpacked" and choose the `extension` folder in the install folder:
+   - Windows: the last page of the installer shows the path and opens the folder (`%LOCALAPPDATA%\Programs\TabTranscriber\extension`).
+   - macOS: `~/ai-realtime-speech-extension/extension` (press ⌘⇧G in the file dialog to paste the path).
+   - Linux: the `extension` folder in the cloned folder.
+4. The extension asks for permission to "read and change all your data on all websites"; it only uses it to put the on-page captions back on the recorded tab after the page changes.
 5. Click the puzzle-piece icon in the toolbar and pin **Tab Transcriber**.
 
 ## Usage
@@ -144,7 +170,7 @@ The translation model can be changed too: set `"translate_model"` to the full pa
 ## Uninstall
 
 1. Remove Tab Transcriber in `brave://extensions`.
-2. Run `./uninstall.sh` in this folder (removes the registration files; Windows: double-click `uninstall.cmd`).
+2. Windows: uninstall Tab Transcriber from Settings → Apps. macOS and Linux: run `./uninstall.sh` in the folder (removes the registration files).
 3. If you no longer need them, delete this folder, `~/.cache/tab-transcriber` (translation model and logs), and the `faster-whisper` models in `~/.cache/huggingface/hub`.
 
 ## Development
@@ -163,6 +189,9 @@ tests/test_repeats.py  Unit tests for shortening repeats and detecting interject
 tests/test_hints.py  Rules for putting proper nouns into the Whisper prompt (tokenizer only)
 tests/test_chunking.mjs  Unit test for where the recorder splits audio, including with constant background sound (no browser or model needed)
 tests/test_native_host.py  Starts the local program from its registration like a browser would and exchanges messages (Linux and Windows; GitHub Actions runs it on Windows)
+install.sh     Install for Linux and macOS; install.ps1 is the Windows one (install.cmd runs it on double-click)
+installer/TabTranscriber.iss  Windows installer (Inno Setup): copies files, then runs install.ps1; built by GitHub Actions and attached to the Release on v* tags
+.github/workflows/install.yml  Linux unit tests plus macOS and Windows install tests (Windows builds Setup.exe and installs it silently)
 docs/research/ Research notes and measurements (in Chinese)
 ```
 

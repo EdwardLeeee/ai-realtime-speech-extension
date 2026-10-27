@@ -1,6 +1,6 @@
 """照瀏覽器的方式找到註冊檔、啟動本機程式、用 native messaging 格式交換訊息（不需要瀏覽器）。
 
-Linux 和 Windows 都能跑，用來確認 install.sh／install.ps1 裝好的東西真的能用：
+Linux、macOS、Windows 都能跑，用來確認 install.sh／install.ps1 裝好的東西真的能用：
   1. 從註冊位置（Linux 的 NativeMessagingHosts 資料夾、Windows 的登錄檔）讀到註冊檔，啟動裡面寫的程式。
   2. 送 start，等模型載入；送一段英文錄音，要回轉好的英文。
   3. 打開雙語字幕，要回翻譯模型 ready 和中文譯文；送 flush 要回 flushed。
@@ -46,7 +46,9 @@ def manifest_path():
             except OSError:
                 continue
         return None
-    for d in (".config/BraveSoftware/Brave-Browser", ".config/google-chrome", ".config/chromium"):
+    for d in (".config/BraveSoftware/Brave-Browser", ".config/google-chrome", ".config/chromium",
+              "Library/Application Support/BraveSoftware/Brave-Browser", "Library/Application Support/Google/Chrome",
+              "Library/Application Support/Chromium", "Library/Application Support/Microsoft Edge"):
         p = Path.home() / d / "NativeMessagingHosts" / f"{HOST_NAME}.json"
         if p.exists():
             return p
@@ -58,6 +60,9 @@ def processes(name):
     if WINDOWS:
         out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True).stdout
         return [int(line.split('","')[1]) for line in out.splitlines() if line.lower().startswith(f'"{name.lower()}')]
+    if not os.path.isdir("/proc"):  # macOS
+        out = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True).stdout
+        return [int(line.split(None, 1)[0]) for line in out.splitlines() if name in line]
     pids = []
     for d in os.listdir("/proc"):
         if d.isdigit():

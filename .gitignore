@@ -2,3 +2,4 @@ host/.venv/
 __pycache__/
 host/vendor/
 host/com.tab_transcriber.host.json
+installer/Output/

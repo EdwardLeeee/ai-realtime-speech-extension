@@ -27,6 +27,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import socket
 import struct
 import subprocess
@@ -592,6 +593,9 @@ def incoming(first):
 
 
 def main():
+    if not WINDOWS:
+        # 瀏覽器結束時可能送 SIGTERM：照一般結束的路走（finally 會關掉翻譯模型）。macOS 沒有 setpriv 的 pdeathsig 可以靠。
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         filename=LOG_PATH, encoding="utf-8", level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
