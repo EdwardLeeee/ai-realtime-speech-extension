@@ -175,7 +175,8 @@ def main():
             "host = importlib.util.module_from_spec(spec); spec.loader.exec_module(host)\n"
             "child = subprocess.Popen(['ping', '-n', '120', '127.0.0.1'], stdout=subprocess.DEVNULL)\n"
             "host.kill_with_host(child)\n"
-            "print(child.pid, flush=True)\n"
+            # 載入本機程式時它把 sys.stdout 換成 stderr（stdout 留給 native messaging），所以寫原本的 stdout
+            "sys.__stdout__.write(f'{child.pid}\\n'); sys.__stdout__.flush()\n"
             "time.sleep(120)\n"
         )
         parent = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE, text=True)

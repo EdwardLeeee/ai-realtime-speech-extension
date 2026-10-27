@@ -52,6 +52,7 @@ Source: "..\host\transcriber_host.py"; DestDir: "{app}\host"; Flags: ignoreversi
 Source: "..\host\run_host.bat"; DestDir: "{app}\host"; Flags: ignoreversion
 Source: "..\host\pyproject.toml"; DestDir: "{app}\host"; Flags: ignoreversion
 Source: "..\host\uv.lock"; DestDir: "{app}\host"; Flags: ignoreversion
+Source: "..\host\.python-version"; DestDir: "{app}\host"; Flags: ignoreversion
 Source: "..\install.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\uninstall.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
