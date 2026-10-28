@@ -110,6 +110,7 @@ Notes:
 - If you switch the caption language during a recording, that video's lines in the transcript switch to the new language. "清除" (Clear) only removes earlier recordings; this recording's captions stay.
 - Bilingual captions still work, translated to Traditional Chinese by the local model; the captions can be in any language. The next ~60 seconds of the video are translated ahead of time, so the Chinese shows up together with the original; after you seek, translation restarts from the new position. Only lines near the playback position get translated, so parts you haven't played stay untranslated in the transcript. Stopping doesn't wait for lines that haven't played yet.
 - On sites other than YouTube it records and uses Whisper as usual. While the switch is on, YouTube tabs always use captions and never fall back to Whisper on their own; for a video without captions (most live streams) you get a notice after 10 seconds. To use Whisper there, stop, turn off the "YouTube 字幕" switch, and start again.
+- After the extension is reloaded or updated, reload any YouTube tab that was already open; until you do, clicking the icon there tells you to reload the page instead of falling back to Whisper.
 - So far this has only been verified on a mock YouTube page: in the automated test browser YouTube blocks captions and playback. It hasn't been tested on real YouTube yet (including turning CC on automatically), and YouTube changes could break it.
 - YouTube's own CC still shows on the video, together with the extension's caption box.
 

@@ -283,6 +283,30 @@ try {
     await until(async () => ((await getState()).state.status === 'idle' ? true : null), 10000);
     await sleep(500);
     check((await ccState()) === 'true', '使用者自己開的 CC，停止後還開著');
+
+    log('重新載入插件，YouTube 分頁不重新整理');
+    const { id: id2 } = await cdp('Extensions.loadUnpacked', { path: ext }); // 同一個資料夾再載入一次就是重新載入
+    check(id2 === id, `插件重新載入（ID = ${id2}）`);
+    await sleep(1500);
+    const { targetId: panel2Target } = await cdp('Target.createTarget', { url: `chrome-extension://${id}/sidepanel.html` });
+    const panel2 = await attach(panel2Target);
+    // 插件還沒載入完時開的頁面拿不到 chrome.storage，重新整理到拿得到為止
+    await until(async () => {
+      if (await evaluate(panel2, `typeof chrome.storage?.local === 'object'`).catch(() => false)) return true;
+      await evaluate(panel2, `location.reload()`).catch(() => {});
+      return null;
+    }, 10000);
+    // 萬一又改用 Whisper：不支援的語言讓本機程式馬上回錯誤，不載入 Whisper、不佔顯示卡
+    await evaluate(panel2, `chrome.storage.local.set({ language: 'xx' })`);
+    await cdp('Target.activateTarget', { targetId: pageTarget });
+    await cdp('Extensions.triggerAction', { id, targetId: tab.targetId });
+    const s2 = await until(async () => {
+      const s = await evaluate(panel2, `chrome.storage.session.get('state').then((r) => r.state ?? {})`);
+      return ['error', 'recording'].includes(s.status) ? s : null;
+    }, 8000);
+    const offscreen2 = (await cdp('Target.getTargets')).targetInfos.some((t) => t.url.endsWith('/offscreen.html'));
+    check(s2?.status === 'error' && /重新整理網頁/.test(s2.message) && !offscreen2,
+      `插件重新載入前開的 YouTube 分頁：請使用者重新整理，不改用 Whisper（${s2?.status ?? '沒有反應'}：${s2?.message ?? ''}）`);
   }
 } catch (err) {
   log('ERROR', err.message);

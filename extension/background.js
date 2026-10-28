@@ -186,6 +186,10 @@ async function start(tab) {
     ? await chrome.tabs.sendMessage(tab.id, { target: 'yt-captions', type: 'probe' }, { frameId: 0 }).catch(() => null)
     : null;
   if (probe?.youtube) return startCaptions(tab, probe.track);
+  // 插件重新載入以前就開著的 YouTube 分頁沒有 bridge，不要不聲不響改用 Whisper
+  if (ytCaptions && bridgePage(tab.url)) {
+    return fail('這個 YouTube 分頁是插件重新載入以前開的，讀不到字幕。請重新整理網頁再點一次圖示；要用 Whisper 聽的話，關掉「YouTube 字幕」。');
+  }
   try {
     await ensureOffscreen();
     // 先拿分頁音訊：這一步最常因為「沒在那個分頁點圖示」失敗，失敗就不必啟動 Whisper。
@@ -213,6 +217,20 @@ async function start(tab) {
   } catch (err) {
     await fail(explain(err));
   }
+}
+
+// 網址是不是 yt-caption-bridge.js 會注入的頁面（照 manifest 的 matches；比對時不看 port，和 Chrome 一樣）
+function bridgePage(url) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  const bare = `${u.protocol}//${u.hostname}${u.pathname}`;
+  const scripts = chrome.runtime.getManifest().content_scripts ?? [];
+  return scripts.some((cs) => cs.js.includes('yt-caption-bridge.js') && cs.matches.some((m) =>
+    new RegExp(`^${m.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`).test(bare)));
 }
 
 // YouTube 字幕模式：不錄音、不載入 Whisper；本機程式只用來翻譯（雙語字幕開著時）。
