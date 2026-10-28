@@ -592,6 +592,24 @@ Whisper 碰到配樂或歌聲時，常會一直重複同一句，直到產生上
 - 插件重新載入以前開的 YouTube 分頁（2026-10-28）：分頁裡舊的 bridge 已經跟插件斷線，問不到就會照一般網頁改用 Whisper，使用者看到的是「比原生 CC 慢好幾秒」，也不知道為什麼。host.log 裡使用者那天 10:20 兩次是字幕模式（`model=none`），10:23 起是 Whisper（`model=large-v3-turbo`），很可能就是這樣。改成：「YouTube 字幕」開著、網址是 manifest 裡 bridge 會注入的頁面，卻問不到 bridge，就直接提示重新整理網頁，不改用 Whisper。`e2e_youtube_cc.mjs` 最後用 `Extensions.loadUnpacked` 同一個資料夾重新載入插件、分頁不重新整理再點圖示來檢查；拿掉這段判斷時這一項會失敗（變成去錄音）。這一項把語言設成不支援的 `xx`，萬一又改用 Whisper，本機程式會在載入 Whisper 以前就回錯誤，不佔顯示卡。
 - 還沒驗證：真的 YouTube（CC 按鈕的寫法、YouTube 記住 CC 的時機：如果 YouTube 在插件按下去之後才套上「上次開著」，插件會以為 CC 是它開的，停止時把它關掉）；雙語的先翻（`--bilingual` 和 `test_native_host.py` 要用顯示卡，等使用者同意再跑）。
 
+## 15. 查證：AMD 顯示卡跑 Whisper（2026-10-28，還沒做）
+
+使用者：「那我朋友a卡也想跑你有辦法加嗎？」朋友用 Windows，顯示卡型號還在問。專案沒有自己寫的 CUDA 程式：Whisper 的顯示卡運算都在 CTranslate2 裡，翻譯是 llama.cpp 的 Vulkan 版（A 卡本來就能翻譯）。
+
+**路一：CTranslate2 的 ROCm 版（型號對就走這條）**
+
+- CTranslate2 4.7.0（2026-02-03）加入 AMD ROCm HIP（PR #1989：「Passes all tests and successfully outputs for whisper」）。ROCm 版的 wheel 不在 PyPI，放在 GitHub Release 的 `rocm-python-wheels-Windows.zip`（v4.8.4：151 MB，cp39–cp315，每個約 18 MB）。
+- 在 Linux 上解開 cp312 wheel、只用 `objdump -p` 看（沒有執行）：`ctranslate2.dll`（94 MB）只連到 `amdhip64_7.dll` 和 `hipblas.dll`，沒有 MIOpen；`__init__.py` 會自己把 site-packages 裡 `_rocm_sdk_core/bin`、`_rocm_sdk_libraries*/bin` 加進 DLL 路徑。官方文件 `docs/building_rocm_windows.md`：用 AMD 的 Python wheel，不要用 HIP SDK 安裝檔（7.1.1 的 DLL 名字不同，`import ctranslate2` 會找不到模組）；`get_supported_compute_types("cuda")` 的 cuda 就是 HIP 裝置，所以 `device="cuda"` 的程式不用改。
+- 執行時要的 AMD wheel（repo.radeon.com/rocm/windows/rocm-rel-7.2/）：`rocm_sdk_core`（637 MB，有 `amdhip64_7.dll`、`amd_comgr0702.dll`）＋`rocm_sdk_libraries_custom`（492 MB，有 `hipblas.dll`、`rocblas.dll`）；`rocm_sdk_devel`（1.4 GB）是編譯用的，執行不需要。
+- **能跑的顯示卡**：CTranslate2 編了 gfx1030、1100–1102、1150、1151、1200、1201，但 AMD 的 `rocm_sdk_libraries_custom` 裡 rocBLAS 只有 gfx1100、1101、1102、1150、1151、1200、1201（用 HTTP Range 只讀 zip 目錄算出來的）。所以 Windows 上是 RX 7000（RDNA3）、RX 9000（RDNA4）、Radeon 880M／890M（Ryzen AI 300）、8060S 一類（Ryzen AI Max）；RX 6800／6900（gfx1030）沒有 rocBLAS 核心，RX 6600／6700（gfx1031／1032）、Radeon 780M（gfx1103）和更舊的都不在。
+- 沒有 AMD 顯示卡的電腦裝了這個 wheel，少了 `amdhip64_7.dll` 會連 `import ctranslate2` 都失敗，CPU 也不能用，所以只能在偵測到 A 卡時才換，而且要連 AMD 的兩個 wheel 一起裝。
+- 這台（RTX 2060）和 GitHub 的測試機都沒有 A 卡：只驗證得到「裝得起來、沒有 A 卡時退回 CPU」，用 A 卡轉文字要朋友實測。
+
+**路二：whisper.cpp 的 Vulkan 版（RX 6000 和更舊的卡）**
+
+- 和翻譯用的 llama.cpp 同一套 ggml，Vulkan 驅動夠新的 A 卡、Intel 顯示卡都能用。whisper.cpp v1.9.5（2026-10-06）的 GitHub Release 沒有附任何編好的檔案（`gh release view` 看到 0 個），要自己在 CI 編；模型要換成 ggml 格式，轉文字那一段等於重寫，切段、即時字幕、重複縮短都要重新驗證。
+
+
 ## 附錄
 
 ### 量測工具與重現
