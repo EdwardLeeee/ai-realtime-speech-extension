@@ -192,6 +192,33 @@ try {
     await sleep(4000);
     let f = await until(async () => ((await followsVideo()).ok ? true : null), 3000);
     check(Boolean(f), `網頁字幕和側邊欄跟著影片走（${(await followsVideo()).text}）`);
+    // 原生 CC 在一句開始時就換；網頁字幕晚多少（毫秒）：影片時間跨過一句開頭的時刻 → 網頁字幕換成那一句
+    const lags = await evaluate(page, `new Promise((resolve) => {
+      const v = document.querySelector('video');
+      const root = document.querySelector('tab-transcriber-caption').shadowRoot;
+      const cues = ${JSON.stringify(CUES)};
+      const crossed = {}, shown = {};
+      let last = v.currentTime;
+      const poll = setInterval(() => {
+        const t = v.currentTime, now = performance.now();
+        cues.forEach((c, i) => { if (last < c.start && t >= c.start) crossed[i] = now - ((t - c.start) / v.playbackRate) * 1000; });
+        last = t;
+      }, 4);
+      const seen = new MutationObserver(() => {
+        const text = root.querySelector('.line:last-child')?.firstChild?.textContent;
+        const i = cues.findIndex((c) => c.text === text);
+        if (i >= 0 && !(i in shown)) shown[i] = performance.now();
+      });
+      seen.observe(root, { childList: true, subtree: true, characterData: true });
+      setTimeout(() => {
+        clearInterval(poll);
+        seen.disconnect();
+        resolve(Object.keys(crossed).filter((i) => i in shown).map((i) => Math.round(shown[i] - crossed[i])));
+      }, 8500);
+    })`);
+    const sorted = [...lags].sort((a, b) => a - b);
+    check(sorted.length >= 3 && sorted[sorted.length >> 1] <= 60 && sorted.at(-1) <= 150,
+      `網頁字幕在一句開始時就換（${sorted.length} 句，晚 ${lags.join('、')} 毫秒）`);
 
     log('往回拖到 1 秒');
     await evaluate(page, `document.querySelector('video').currentTime = 1`);

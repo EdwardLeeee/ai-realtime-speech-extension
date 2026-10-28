@@ -19,6 +19,8 @@
   let videoSince = 0; // 什麼時候換到這部影片
   let current; // 上次送出的那一句的開始時間；null 是影片還沒播到第一句
   let video = null;
+  let cueTimer = null; // 下一句開始的那一刻再檢查一次
+  const EVENTS = ['timeupdate', 'seeked', 'play', 'ratechange'];
 
   const videoId = () => new URLSearchParams(location.search).get('v');
   const send = (msg) => chrome.runtime.sendMessage(msg).catch(() => {});
@@ -54,12 +56,13 @@
   }
 
   function tick() {
+    clearTimeout(cueTimer);
     if (!active) return;
     const el = document.querySelector('video.html5-main-video') ?? document.querySelector('video');
     if (el !== video) {
-      video?.removeEventListener('timeupdate', tick);
+      for (const type of EVENTS) video?.removeEventListener(type, tick);
       video = el;
-      video?.addEventListener('timeupdate', tick);
+      for (const type of EVENTS) video?.addEventListener(type, tick);
       lastTime = null;
     }
     const id = videoId();
@@ -80,6 +83,11 @@
     // 現在這一句：最後一句已經開始的；兩句之間的空檔留著上一句
     const i = track.cues.findLastIndex((c) => c.start <= t);
     const start = i < 0 ? null : track.cues[i].start;
+    // timeupdate 大約每 250 毫秒才來一次，等它會比原生 CC 晚換；字幕的開始時間都知道，算好下一句什麼時候開始
+    const upcoming = track.cues.find((c) => c.start > t);
+    if (upcoming && !video.paused && video.playbackRate > 0) {
+      cueTimer = setTimeout(tick, ((upcoming.start - t) / video.playbackRate) * 1000 + 5);
+    }
     if (start === current) return;
     current = start;
     send({ type: 'yt-cue', videoId: id, start, seeked });
@@ -89,6 +97,7 @@
   function setActive(on) {
     active = on;
     clearInterval(timer);
+    clearTimeout(cueTimer);
     lastTime = null;
     lastVideo = undefined;
     current = undefined;
