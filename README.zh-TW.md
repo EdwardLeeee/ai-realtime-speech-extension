@@ -102,11 +102,14 @@ cd ai-realtime-speech-extension
 ## YouTube 字幕
 
 - 打開側邊欄的「YouTube 字幕」開關後，在有字幕（CC）的 YouTube 影片上點圖示，就直接用 YouTube 播放器的字幕：不錄聲音、不跑 Whisper，也不佔顯示卡。人工字幕通常比 Whisper 準；自動產生的字幕就是 YouTube 自己的品質。
-- 要先在播放器打開 CC（按 C 鍵或字幕按鈕）。插件只讀播放器自己載入的那份字幕，不另外下載。10 秒內沒拿到字幕會提示；已經打開 CC 的話，重新整理網頁或換一次字幕語言。
-- 每句前面的時間是**影片本身的時間**。往回拖或重新整理網頁，不會重複記同一句。
-- 雙語字幕照樣可以開，用這台電腦上的翻譯模型翻成繁體中文；字幕是什麼語言都可以。
+- 播放器的 CC 沒開時，插件會幫你按一次 CC（播放器只有打開 CC 時才會載入字幕）；停止時再關回去。你自己本來就開著的話，插件不會動它。10 秒內沒拿到字幕會提示，通常是影片沒有字幕；已經打開 CC 的話，重新整理網頁或換一次字幕語言。
+- 插件讀的是播放器自己載入的那份字幕，不另外下載。一拿到就把**整部影片的字幕**放進文字稿，所以還沒播到的部分也能先看、複製或下載。YouTube 的服務條款不允許未經授權下載影片內容，請只用在個人學習。
+- 每句前面的時間是**影片本身的時間**。側邊欄會標出影片現在播到的那一句並跟著捲動；自己往上或往下捲開時就不會拉回來，捲回看得到那一句時再繼續跟。往回拖或重新整理網頁，不會重複記同一句。
+- 同一次錄音中換了字幕語言，這部影片的文字稿會換成新的語言。
+- 雙語字幕照樣可以開，用這台電腦上的翻譯模型翻成繁體中文；字幕是什麼語言都可以。會先翻好影片接下來約 60 秒的句子，所以中文和原文一起出現；往前或往後拖了進度條，就改從新的位置開始翻。只會翻播放位置附近的句子，沒播到的部分在文字稿裡只有原文。停止時不等還沒播到的句子翻完。
 - 不是 YouTube，或影片沒有字幕（例如大部分直播）時，照常錄音、用 Whisper 轉。
-- 目前只在模擬 YouTube 的測試網頁上驗證過：自動化測試用的瀏覽器裡，YouTube 會擋字幕和播放。真的 YouTube 還沒實測，YouTube 改版也可能讓它失效。
+- 目前只在模擬 YouTube 的測試網頁上驗證過：自動化測試用的瀏覽器裡，YouTube 會擋字幕和播放。真的 YouTube 還沒實測（包括自動打開 CC），YouTube 改版也可能讓它失效。
+- YouTube 自己的 CC 也會照常顯示在影片上，和插件的字幕框同時出現。
 
 ## 專有名詞
 
@@ -198,9 +201,10 @@ host/        本機轉文字程式（native messaging host，Python + faster-whi
 tests/e2e.mjs  端到端測試：headless Brave 載入插件、播錄音、模擬點圖示、檢查文字稿與雙語字幕
 tests/test_repeats.py  本機程式縮短重複、判斷狀聲詞的單元測試（不需要模型）
 tests/test_hints.py  專有名詞放進 Whisper 提示的規則（只用 tokenizer）
+tests/test_caption_queue.py  YouTube 字幕模式的翻譯排隊（不啟動翻譯模型）
 tests/test_chunking.mjs  錄音頁切段的單元測試：背景一直有聲音時也要在句子停頓處切（不需要瀏覽器和模型）
 tests/test_native_host.py  照瀏覽器的方式從註冊位置啟動本機程式、交換訊息（Linux、Windows 都能跑；GitHub Actions 在 Windows 上跑）
-tests/e2e_youtube_cc.mjs  YouTube 字幕模式：假的 YouTube 觀看頁，檢查字幕照影片時間進文字稿、不重複、不錄音
+tests/e2e_youtube_cc.mjs  YouTube 字幕模式：假的 YouTube 觀看頁，檢查自動打開 CC、整部進文字稿、跟著影片時間走、不重複、不錄音
 install.sh     Linux、macOS 的安裝；install.ps1 是 Windows 的（install.cmd 點兩下執行它）
 installer/TabTranscriber.iss  Windows 安裝檔（Inno Setup）：複製檔案後執行 install.ps1；GitHub Actions 編譯，推 v* tag 時放上 Release
 .github/workflows/install.yml  Linux 單元測試、macOS 和 Windows 的安裝測試（Windows 是編出 Setup.exe 再靜默安裝）
@@ -216,6 +220,7 @@ node tests/e2e.mjs --audio $C/gongitsune-01.mp3 --start 60 --duration 40 --lang 
 node tests/e2e.mjs --audio $C/fleurs-th-dev.mp3 --start 0 --duration 84 --lang th --bilingual on
 host/.venv/bin/python -m unittest tests/test_repeats.py
 host/.venv/bin/python -m unittest tests/test_hints.py
+host/.venv/bin/python -m unittest tests/test_caption_queue.py
 node tests/test_chunking.mjs
 node tests/e2e_youtube_cc.mjs
 host/.venv/bin/python tests/test_native_host.py   # Windows：host\.venv\Scripts\python.exe tests\test_native_host.py

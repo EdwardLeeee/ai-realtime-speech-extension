@@ -178,11 +178,15 @@ def main():
               f"字幕模式不載入 Whisper（{ready}，{time.monotonic() - started:.1f} 秒）")
         tr = host.wait_for(lambda m: m.get("type") == "translator" and m.get("state") in ("ready", "error"), 300)
         check(tr is not None and tr["state"] == "ready", f"字幕模式的翻譯模型啟動：{tr}")
-        host.send({"type": "text", "segments": [{"start": 3.0, "end": 5.0, "text": "Where are you going tonight?"}]})
-        got = host.wait_for(lambda m: m.get("type") == "translation", 120)
+        # 拖了進度條：先送的那組被 replace 丟掉（或已經在翻），新位置的那組一定要翻回來，tag 原樣帶回
+        host.send({"type": "text", "tag": "vid#1", "replace": True,
+                   "segments": [{"start": 1.0, "end": 2.0, "text": "Good morning."}]})
+        host.send({"type": "text", "tag": "vid#1", "replace": True,
+                   "segments": [{"start": 3.0, "end": 5.0, "text": "Where are you going tonight?"}]})
+        got = host.wait_for(lambda m: m.get("type") == "translation" and m.get("start") == 3.0, 120)
         print("  譯文：", (got or {}).get("text"), flush=True)
-        check(got is not None and got.get("start") == 3.0 and any("\u4e00" <= c <= "\u9fff" for c in got["text"]),
-              "字幕模式：送來的字幕翻成中文")
+        check(got is not None and got.get("tag") == "vid#1" and any("\u4e00" <= c <= "\u9fff" for c in got["text"]),
+              "字幕模式：送來的字幕翻成中文，帶回 tag")
         host.proc.stdin.close()
         try:
             host.proc.wait(timeout=30)

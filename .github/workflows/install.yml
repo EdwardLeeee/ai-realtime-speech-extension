@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: node tests/test_chunking.mjs
-      - run: python3 -m unittest tests/test_repeats.py
+      - run: python3 -m unittest tests/test_repeats.py tests/test_caption_queue.py
 
   macos:
     runs-on: macos-latest
@@ -35,7 +35,7 @@ jobs:
       - name: 本機程式（native messaging）
         run: host/.venv/bin/python tests/test_native_host.py
       - name: 單元測試
-        run: host/.venv/bin/python -m unittest tests/test_repeats.py tests/test_hints.py
+        run: host/.venv/bin/python -m unittest tests/test_repeats.py tests/test_hints.py tests/test_caption_queue.py
       - name: host.log
         if: always()
         run: tail -40 ~/.cache/tab-transcriber/host.log; tail -20 ~/.cache/tab-transcriber/llama-server.log || true
@@ -74,7 +74,7 @@ jobs:
           $py = "$env:LOCALAPPDATA\Programs\TabTranscriber\host\.venv\Scripts\python.exe"
           & $py tests\test_native_host.py
           if ($LASTEXITCODE -ne 0) { throw 'test_native_host 失敗' }
-          & $py -m unittest tests/test_repeats.py tests/test_hints.py
+          & $py -m unittest tests/test_repeats.py tests/test_hints.py tests/test_caption_queue.py
           if ($LASTEXITCODE -ne 0) { throw '單元測試失敗' }
       - name: host.log
         if: always()

@@ -239,7 +239,7 @@ try {
     check((await ccState()) === 'false', '停止後插件打開的 CC 關回去了');
 
     log('使用者自己開著 CC 再錄一次');
-    await evaluate(page, `document.querySelector('.ytp-subtitles-button').click()`);
+    await evaluate(page, `(b => b.getAttribute('aria-pressed') === 'true' || b.click())(document.querySelector('.ytp-subtitles-button'))`);
     await sleep(500);
     await cdp('Extensions.triggerAction', { id, targetId: tab.targetId });
     await until(async () => ((await getState()).state.status === 'recording' ? true : null), 8000);

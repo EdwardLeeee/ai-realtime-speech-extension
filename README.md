@@ -104,11 +104,14 @@ Notes:
 ## YouTube captions
 
 - With the "YouTube 字幕" (YouTube captions) switch on in the side panel, clicking the icon on a YouTube video that has captions (CC) uses the player's own captions: nothing is recorded, Whisper doesn't run and the GPU isn't used. Human-made captions are usually more accurate than Whisper; auto-generated ones are YouTube's own quality.
-- Turn CC on in the player first (press C or the captions button). The extension only reads the caption file the player itself loads and never downloads anything else. If no captions arrive within 10 seconds it tells you; if CC is already on, reload the page or switch the caption language once.
-- The time in front of each line is **the video's own time**. Seeking back or reloading the page doesn't record the same line twice.
-- Bilingual captions still work, translated to Traditional Chinese by the local model; the captions can be in any language.
+- If CC is off in the player, the extension presses the CC button once for you (the player only loads captions while CC is on) and turns it back off when you stop. If you had CC on yourself, it leaves it alone. If no captions arrive within 10 seconds it tells you; usually the video has no captions. If CC is already on, reload the page or switch the caption language once.
+- The extension reads the caption file the player itself loads and never downloads anything else. As soon as it has it, **the whole video's captions** go into the transcript, so you can read, copy or download the parts that haven't played yet. YouTube's Terms of Service don't allow downloading content without authorization; keep it to personal study.
+- The time in front of each line is **the video's own time**. The side panel highlights the line playing now and scrolls along with it; if you scroll away yourself it won't pull you back, and it follows again once that line is in view. Seeking back or reloading the page doesn't record the same line twice.
+- If you switch the caption language during a recording, that video's lines in the transcript switch to the new language.
+- Bilingual captions still work, translated to Traditional Chinese by the local model; the captions can be in any language. The next ~60 seconds of the video are translated ahead of time, so the Chinese shows up together with the original; after you seek, translation restarts from the new position. Only lines near the playback position get translated, so parts you haven't played stay untranslated in the transcript. Stopping doesn't wait for lines that haven't played yet.
 - On sites other than YouTube, or videos without captions (most live streams), it records and uses Whisper as usual.
-- So far this has only been verified on a mock YouTube page: in the automated test browser YouTube blocks captions and playback. It hasn't been tested on real YouTube yet, and YouTube changes could break it.
+- So far this has only been verified on a mock YouTube page: in the automated test browser YouTube blocks captions and playback. It hasn't been tested on real YouTube yet (including turning CC on automatically), and YouTube changes could break it.
+- YouTube's own CC still shows on the video, together with the extension's caption box.
 
 ## Proper nouns
 
@@ -200,9 +203,10 @@ host/        Local speech-to-text program (native messaging host, Python + faste
 tests/e2e.mjs  End-to-end test: headless Brave loads the extension, plays audio, simulates the icon click, checks transcript and bilingual captions
 tests/test_repeats.py  Unit tests for shortening repeats and detecting interjections in the local program (no model needed)
 tests/test_hints.py  Rules for putting proper nouns into the Whisper prompt (tokenizer only)
+tests/test_caption_queue.py  Translation queue for YouTube captions mode (no translation model started)
 tests/test_chunking.mjs  Unit test for where the recorder splits audio, including with constant background sound (no browser or model needed)
 tests/test_native_host.py  Starts the local program from its registration like a browser would and exchanges messages (Linux and Windows; GitHub Actions runs it on Windows)
-tests/e2e_youtube_cc.mjs  YouTube captions mode on a mock YouTube watch page: lines follow video time, no duplicates, no recording
+tests/e2e_youtube_cc.mjs  YouTube captions mode on a mock YouTube watch page: CC turned on automatically, whole video in the transcript, follows video time, no duplicates, no recording
 install.sh     Install for Linux and macOS; install.ps1 is the Windows one (install.cmd runs it on double-click)
 installer/TabTranscriber.iss  Windows installer (Inno Setup): copies files, then runs install.ps1; built by GitHub Actions and attached to the Release on v* tags
 .github/workflows/install.yml  Linux unit tests plus macOS and Windows install tests (Windows builds Setup.exe and installs it silently)
@@ -218,6 +222,7 @@ node tests/e2e.mjs --audio $C/gongitsune-01.mp3 --start 60 --duration 40 --lang 
 node tests/e2e.mjs --audio $C/fleurs-th-dev.mp3 --start 0 --duration 84 --lang th --bilingual on
 host/.venv/bin/python -m unittest tests/test_repeats.py
 host/.venv/bin/python -m unittest tests/test_hints.py
+host/.venv/bin/python -m unittest tests/test_caption_queue.py
 node tests/test_chunking.mjs
 node tests/e2e_youtube_cc.mjs
 host/.venv/bin/python tests/test_native_host.py   # Windows: host\.venv\Scripts\python.exe tests\test_native_host.py
