@@ -258,7 +258,7 @@ function armCaptionsPrompt() {
   const { id } = rec;
   rec.ccTimer = setTimeout(() => {
     if (rec?.id === id && !rec.stopping && !rec.videos.has(rec.videoId)) {
-      setState({ message: '還沒收到 YouTube 字幕：這部影片可能沒有字幕。有的話，請在播放器打開 CC；已經打開的話，重新整理網頁或換一次字幕語言。' });
+      setState({ message: '還沒收到 YouTube 字幕：這部影片可能沒有字幕，要用 Whisper 聽的話，按停止、關掉「YouTube 字幕」再開始。有字幕的話，請在播放器打開 CC；已經打開的話，重新整理網頁或換一次字幕語言。' });
     }
   }, CC_WAIT_MS);
 }
