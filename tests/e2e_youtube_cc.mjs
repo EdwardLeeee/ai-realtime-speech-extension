@@ -216,6 +216,12 @@ try {
     check(state.status === 'recording' && after.length === CUES.length && new Set(after).size === after.length && f.ok,
       `重新整理後繼續跟著影片、不重複（${after.length} 句；${f.text}）`);
 
+    // 清除要按兩次；字幕模式的文字稿是整部影片的字幕，只清以前的錄音
+    await evaluate(panel, `document.getElementById('clear').click(); document.getElementById('clear').click()`);
+    await sleep(1000);
+    ({ rec } = await getState());
+    check(rec.segments.length === CUES.length && Boolean(await nowLine()), `按清除後這部影片的字幕還在、還標著現在這一句（${rec.segments.length} 句）`);
+
     if (opt.bilingual) {
       // 先翻好後面的句子：影片還沒播到的地方就有譯文
       const ahead = await until(async () => {
@@ -224,8 +230,10 @@ try {
         return n ? { n, now } : null;
       }, 60000);
       check(Boolean(ahead), `雙語字幕：影片還沒播到的句子先有譯文（${ahead ? `${ahead.n} 句，影片在 ${ahead.now.toFixed(1)} 秒` : '沒有'}）`);
-      const shownTr = await evaluate(page, `document.querySelector('tab-transcriber-caption')?.shadowRoot.querySelector('.line:last-child .tr')?.textContent ?? ''`);
-      check(/[一-鿿]/.test(shownTr), `網頁字幕現在這一句有中文（${shownTr}）`);
+      // 剛拖過進度條時，現在這一組可能還在翻
+      const overlayTr = () => evaluate(page, `document.querySelector('tab-transcriber-caption')?.shadowRoot.querySelector('.line:last-child .tr')?.textContent ?? ''`);
+      const shownTr = await until(async () => { const tr = await overlayTr(); return /[一-鿿]/.test(tr) ? tr : null; }, 15000);
+      check(Boolean(shownTr), `網頁字幕現在這一句有中文（${shownTr ?? await overlayTr()}）`);
     }
 
     await evaluate(panel, `document.getElementById('toggle').click()`);

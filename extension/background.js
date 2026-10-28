@@ -135,7 +135,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       updateRecordings((list) => {
         const keep = list.find((r) => r.id === rec?.id);
         list.length = 0;
-        if (keep) list.push({ ...keep, segments: [] });
+        // YouTube 字幕模式的文字稿是整部影片的字幕，清掉就不會再來，所以只清以前的錄音
+        if (keep) list.push(rec.captions ? keep : { ...keep, segments: [] });
       }).then(() => sendResponse({ ok: true }));
       return true;
     case 'chunk':
@@ -294,6 +295,15 @@ function onTrack(msg) {
       old.cues.every((c, i) => c.start === cues[i].start && c.text === cues[i].text)) return;
   writeTranslations(); // 先寫掉舊字幕手上的譯文，免得寫到新字幕同一個時間的句子
   const video = makeVideo(videoId, track, cues);
+  if (old && old.lang === track.lang && old.asr === track.asr) {
+    // 同一份字幕多了或改了幾句：沒變的組，譯文留著
+    const known = new Map(old.units.map((u, k) => [`${old.cues[u.last].start}|${u.text}`, old.tr.get(k)]));
+    video.units.forEach((u, k) => {
+      const tr = known.get(`${cues[u.last].start}|${u.text}`);
+      if (tr) video.tr.set(k, tr);
+    });
+  }
+  const trByStart = new Map([...video.tr].map(([k, tr]) => [cues[video.units[k].last].start, tr]));
   rec.videos.set(videoId, video);
   clearTimeout(rec.ccTimer);
   setState({ model: ccLabel(track), message: '' });
@@ -302,7 +312,8 @@ function onTrack(msg) {
     const r = list.find((x) => x.id === recId);
     if (!r) return;
     if (track.lang) r.language = track.lang;
-    const segs = cues.map((c) => ({ start: c.start, end: c.end, text: c.text, videoId }));
+    const segs = cues.map((c) => ({ start: c.start, end: c.end, text: c.text, videoId,
+      ...(trByStart.has(c.start) ? { translation: trByStart.get(c.start) } : {}) }));
     const at = r.segments.findIndex((s) => s.videoId === videoId);
     const rest = r.segments.filter((s) => s.videoId !== videoId);
     r.segments = at < 0 ? [...rest, ...segs] : [...rest.slice(0, at), ...segs, ...rest.slice(at)];
