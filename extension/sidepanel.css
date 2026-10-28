@@ -11,6 +11,7 @@
   --warn-bg: #fff4e5;
   --warn-text: #8a4b00;
   --time: #2563eb;
+  --now-bg: #eaf1ff;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -26,6 +27,7 @@
     --warn-bg: #3a2a12;
     --warn-text: #f5c27a;
     --time: #7aa2ff;
+    --now-bg: #1d2a44;
   }
 }
 
@@ -183,6 +185,9 @@ button.tool { min-height: 28px; padding: 0 8px; color: var(--muted); font-size: 
 .line .tr { display: block; margin-top: 1px; color: var(--muted); font-size: 0.93em; }
 
 .working { color: var(--muted); font-size: 0.93em; margin: 8px 0 0; }
+
+/* YouTube 字幕模式：影片現在播到的那一句 */
+.line.now { background: var(--now-bg); border-radius: 4px; box-shadow: 0 0 0 4px var(--now-bg); }
 
 /* 即時字幕：還沒定稿，顏色淡一點、尾巴加游標，定稿後換成一般的行 */
 .line.live .src { color: var(--muted); }

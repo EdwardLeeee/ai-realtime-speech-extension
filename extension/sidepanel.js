@@ -19,6 +19,7 @@ let textSize = DEFAULT_TEXT_SIZE;
 let caption = null; // 還沒講完那一句的即時字幕 { recId, id, offset, text }
 let captionTr = null; // 即時字幕的譯文 { recId, id, text }
 let clearArmed = null;
+let nowKey = ''; // YouTube 字幕模式：上次標出來的「影片現在這一句」，換了才捲過去
 
 async function load() {
   ({ state = {} } = await chrome.storage.session.get('state'));
@@ -121,10 +122,20 @@ function makeLine(sec, text, translation, live = false) {
   return line;
 }
 
+// 這一行有沒有露出來（扣掉上面固定的工具列）
+function inView(el) {
+  const r = el.getBoundingClientRect();
+  return r.bottom > document.querySelector('.top').getBoundingClientRect().bottom && r.top < innerHeight;
+}
+
 function render() {
   const active = ACTIVE.includes(state.status);
+  // YouTube 字幕模式：一開始就是整部影片的字幕，標出現在播到的那一句、跟著它捲，不是捲到最下面
+  const captions = active && state.source === 'youtube';
   const scroller = document.scrollingElement;
   const atBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 48;
+  const shown = document.querySelector('.line.now');
+  const following = !shown || inView(shown); // 使用者自己捲走了就不拉回來，捲回來看得到那一句時再跟
 
   $('status').textContent = statusText();
   $('dot').className = `dot ${
@@ -173,9 +184,15 @@ function render() {
     title.textContent = r.title || '（沒有標題的分頁）';
     head.append(title, ` · ${languageName(r)} · ${formatDate(r.startedAt)}`);
     main.append(head);
-    for (const seg of r.segments) main.append(makeLine(seg.start, seg.text, seg.translation));
+    for (const seg of r.segments) {
+      const line = makeLine(seg.start, seg.text, seg.translation);
+      if (captions && r.id === state.recId && seg.videoId === state.now?.videoId && seg.start === state.now?.start) {
+        line.classList.add('now');
+      }
+      main.append(line);
+    }
   }
-  if (active) {
+  if (active && !captions) {
     const live = document.createElement('div');
     live.id = 'live';
     main.append(live);
@@ -186,7 +203,14 @@ function render() {
   }
 
   updateElapsed();
-  if (atBottom) scroller.scrollTop = scroller.scrollHeight;
+  if (captions) {
+    const now = main.querySelector('.line.now');
+    const key = now ? `${state.now.videoId}|${state.now.start}` : '';
+    if (now && key !== nowKey && following) now.scrollIntoView({ block: 'center' });
+    nowKey = key;
+  } else if (atBottom) {
+    scroller.scrollTop = scroller.scrollHeight;
+  }
 }
 
 // 最下面那一行：這一句還沒講完時顯示即時字幕（淺色，會一直改），講完定稿後由正式的一行取代。

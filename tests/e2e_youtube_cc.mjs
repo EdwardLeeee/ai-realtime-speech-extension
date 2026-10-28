@@ -1,6 +1,7 @@
 // YouTube 字幕模式的端到端測試：本機假的 YouTube 觀看頁（播放時用 fetch 抓 /api/timedtext，和真的播放器一樣帶 pot），
 // 載入一份把 127.0.0.1 也加進 YouTube 內容腳本範圍的插件複本（ID 由 manifest 的 key 決定，不變），模擬點圖示。
-// 檢查：不錄音、不載入 Whisper；字幕照影片時間一句句進文字稿和網頁字幕；往回拖、重新整理網頁都不會重複；停止後收乾淨。
+// 檢查：不錄音、不載入 Whisper；插件幫忙打開 CC；一拿到字幕就整部進文字稿；網頁字幕和側邊欄跟著影片時間走；
+// 往回拖、重新整理網頁都不會重複；停止後收乾淨，插件打開的 CC 關回去，使用者自己開的不動。
 // 真的 YouTube 在 headless 瀏覽器裡會擋字幕和播放（研究筆記第 13 節），所以只能用假的頁面測插件這一側。
 //
 // 用法：node tests/e2e_youtube_cc.mjs [--bilingual]（--bilingual 會啟動翻譯模型，要用顯示卡）
@@ -60,15 +61,29 @@ const server = http.createServer((req, res) => {
   }
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(`<!doctype html><title>Mock video - YouTube</title>
-<div id="movie_player" style="width:960px;height:540px;background:#000"><video class="html5-main-video" src="/media.mp3" muted autoplay style="width:100%;height:100%"></video></div>
+<div id="movie_player" style="width:960px;height:540px;background:#000"><video class="html5-main-video" src="/media.mp3" muted autoplay style="width:100%;height:90%"></video>
+<button class="ytp-subtitles-button ytp-button" aria-pressed="false">CC</button></div>
 <script>
-  // 和真的播放器一樣：開始播放後抓字幕（一次 XHR 沒帶 pot、一次 fetch 帶 pot，另外一次是翻譯）
-  document.querySelector('video').addEventListener('playing', () => {
+  // 和真的播放器一樣：CC 開著才抓字幕（一次 XHR 沒帶 pot、一次 fetch 帶 pot，另外一次是翻譯），
+  // 而且會記住上次開著，下次載入就自己抓
+  const button = document.querySelector('.ytp-subtitles-button');
+  let fetched = false;
+  function load() {
+    if (fetched || button.getAttribute('aria-pressed') !== 'true') return;
+    fetched = true;
     const v = new URLSearchParams(location.search).get('v');
     const x = new XMLHttpRequest(); x.open('GET', '/api/timedtext?v=' + v + '&lang=en&fmt=json3'); x.send();
     fetch('/api/timedtext?v=' + v + '&lang=en&fmt=json3&pot=abc123&c=WEB');
     fetch('/api/timedtext?v=' + v + '&lang=en&fmt=json3&pot=abc123&c=WEB&tlang=zh-Hant');
-  }, { once: true });
+  }
+  button.addEventListener('click', () => {
+    const on = button.getAttribute('aria-pressed') !== 'true';
+    button.setAttribute('aria-pressed', String(on));
+    localStorage.cc = on ? '1' : '0';
+    load();
+  });
+  if (localStorage.cc === '1') button.setAttribute('aria-pressed', 'true');
+  document.querySelector('video').addEventListener('playing', load, { once: true });
 </script>`);
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -98,8 +113,9 @@ async function shutdown() {
     for (const pid of profileProcesses()) try { process.kill(Number(pid), sig); } catch {}
   }
   server.close();
-  fs.rmSync(profile, { recursive: true, force: true });
-  fs.rmSync(ext, { recursive: true, force: true });
+  // 瀏覽器剛結束時還可能在寫設定檔，刪不乾淨就再試幾次
+  fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  fs.rmSync(ext, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }
 
 try {
@@ -137,7 +153,7 @@ try {
   await sleep(2500);
   const getState = () => evaluate(panel, `Promise.all([chrome.storage.session.get('state'), chrome.storage.local.get('recordings')]).then(([s, l]) => ({ state: s.state ?? {}, rec: (l.recordings ?? []).at(-1) }))`);
   const videoTime = () => evaluate(page, `document.querySelector('video').currentTime`);
-  const overlayText = () => evaluate(page, `document.querySelector('tab-transcriber-caption')?.shadowRoot.querySelector('.line:last-child')?.textContent ?? ''`);
+  const overlayText = () => evaluate(page, `document.querySelector('tab-transcriber-caption')?.shadowRoot.querySelector('.line:last-child')?.firstChild?.textContent ?? ''`); // 只要原文，不含譯文
   const until = async (fn, ms) => { for (let t = 0; t < ms; t += 250) { const v = await fn(); if (v) return v; await sleep(250); } return fn(); };
 
   const { targetInfos } = await cdp('Target.getTargets', { filter: [{ type: 'tab' }] });
@@ -145,6 +161,16 @@ try {
   await cdp('Target.activateTarget', { targetId: pageTarget });
   await cdp('Extensions.triggerAction', { id, targetId: tab.targetId });
   log('已模擬點擊插件圖示');
+
+  const ccState = () => evaluate(page, `document.querySelector('.ytp-subtitles-button')?.getAttribute('aria-pressed')`);
+  // 影片現在該顯示的那一句（最後一句已經開始的）
+  const cueAt = (t) => CUES.findLast((c) => c.start <= t);
+  const nowLine = () => evaluate(panel, `document.querySelector('.line.now .src')?.textContent ?? ''`);
+  const followsVideo = async () => {
+    const [t, shown, now] = [await videoTime(), await overlayText(), await nowLine()];
+    const ok = [cueAt(t)?.text, cueAt(t - 0.8)?.text].includes(shown) && shown === now;
+    return { ok, text: `影片 ${t.toFixed(1)} 秒，網頁字幕「${shown}」，側邊欄標的「${now}」` };
+  };
 
   if (opt['no-hook']) {
     const s = await until(async () => { const { state } = await getState(); return /打開 CC/.test(state.message) ? state : null; }, 14000);
@@ -154,53 +180,74 @@ try {
     check(started?.source === 'youtube', `用 YouTube 字幕模式開始（來源=${started?.source}，狀態=${started?.status}）`);
     const offscreen = (await cdp('Target.getTargets')).targetInfos.some((t) => t.url.endsWith('/offscreen.html'));
     check(!offscreen, '沒有開錄音頁（不錄聲音）');
-    await sleep(9000);
+    check(await until(async () => (await ccState()) === 'true', 6000), '插件幫忙打開了播放器的 CC');
+    const full = await until(async () => ((await getState()).rec?.segments.length === CUES.length ? true : null), 5000);
     let { state, rec } = await getState();
     const t = await videoTime();
-    const expected = CUES.filter((c) => c.start <= t - 0.6); // 檢查間隔 0.5 秒，留一點餘裕
-    const got = rec.segments.map((s) => s.start);
+    check(Boolean(full) && CUES.every((c, i) => rec.segments[i]?.start === c.start && rec.segments[i]?.text === c.text),
+      `一拿到字幕就整部影片進文字稿（影片才播到 ${t.toFixed(1)} 秒，文字稿 ${rec.segments.length} 句，時間是影片時間）`);
     check(/YouTube 字幕（en）/.test(state.model), `顯示字幕來源（${state.model}）`);
     check(rec.source === 'youtube' && rec.language === 'en', `文字稿標記 YouTube 字幕、語言 en（${rec.source}、${rec.language}）`);
-    check(expected.every((c) => rec.segments.some((s) => s.start === c.start && s.text === c.text)) &&
-      rec.segments.every((s) => CUES.some((c) => c.start === s.start && c.text === s.text && s.start <= t + 0.1)),
-      `影片播到 ${t.toFixed(1)} 秒，文字稿是那之前的每一句，時間是影片時間（${got.join(', ')}）`);
     check(!rec.segments.some((s) => s.text.includes('\n') || !s.text.trim()), '自動字幕的換行事件沒有進文字稿');
-    const shown = await overlayText();
-    check(shown === rec.segments.at(-1)?.text, `網頁字幕顯示目前這一句（${shown}）`);
+    await sleep(4000);
+    let f = await until(async () => ((await followsVideo()).ok ? true : null), 3000);
+    check(Boolean(f), `網頁字幕和側邊欄跟著影片走（${(await followsVideo()).text}）`);
 
     log('往回拖到 1 秒');
     await evaluate(page, `document.querySelector('video').currentTime = 1`);
-    await sleep(3000);
+    await sleep(1500);
     ({ rec } = await getState());
     const starts = rec.segments.map((s) => s.start);
-    check(new Set(starts).size === starts.length, `往回拖不會重複（${starts.length} 句）`);
+    f = await followsVideo();
+    check(starts.length === CUES.length && new Set(starts).size === starts.length && f.ok,
+      `往回拖：文字稿不變（${starts.length} 句）、字幕回到那一句（${f.text}）`);
 
     log('重新整理網頁');
-    const before = rec.segments.length;
     await evaluate(page, `location.reload()`);
-    // 重新整理後影片從頭播：已經收過的句子要擋掉；跳到 20 秒後，後面的新句子要進來
+    // 重新整理後播放器記得 CC 開著，自己抓字幕；插件不能再按一次（會把它關掉）
     await until(async () => (await evaluate(page, `document.querySelector('video')?.currentTime ?? 0`).catch(() => 0)) > 2, 8000);
-    await sleep(2000);
+    await sleep(3000);
+    check((await ccState()) === 'true', '重新整理後 CC 還開著（插件沒有又按一次）');
     await evaluate(page, `document.querySelector('video').currentTime = 20`);
-    await sleep(5000);
+    await sleep(1500);
     ({ state, rec } = await getState());
     const after = rec.segments.map((s) => s.start);
-    check(state.status === 'recording' && new Set(after).size === after.length && after.some((s) => s >= 19),
-      `重新整理後繼續收字幕、不重複（${before} → ${after.length} 句：${after.join(', ')}）`);
+    f = await followsVideo();
+    check(state.status === 'recording' && after.length === CUES.length && new Set(after).size === after.length && f.ok,
+      `重新整理後繼續跟著影片、不重複（${after.length} 句；${f.text}）`);
 
     if (opt.bilingual) {
-      const translated = await until(async () => (await getState()).rec.segments.filter((s) => s.translation).length, 30000);
-      check(translated > 0, `雙語字幕：有譯文（${translated} 句）`);
+      // 先翻好後面的句子：影片還沒播到的地方就有譯文
+      const ahead = await until(async () => {
+        const [{ rec: r }, now] = [await getState(), await videoTime()];
+        const n = r.segments.filter((s) => s.translation && s.start > now + 5).length;
+        return n ? { n, now } : null;
+      }, 60000);
+      check(Boolean(ahead), `雙語字幕：影片還沒播到的句子先有譯文（${ahead ? `${ahead.n} 句，影片在 ${ahead.now.toFixed(1)} 秒` : '沒有'}）`);
+      const shownTr = await evaluate(page, `document.querySelector('tab-transcriber-caption')?.shadowRoot.querySelector('.line:last-child .tr')?.textContent ?? ''`);
+      check(/[一-鿿]/.test(shownTr), `網頁字幕現在這一句有中文（${shownTr}）`);
     }
 
     await evaluate(panel, `document.getElementById('toggle').click()`);
-    const idle = await until(async () => ((await getState()).state.status === 'idle' ? true : null), 30000);
+    const idle = await until(async () => ((await getState()).state.status === 'idle' ? true : null), 10000);
     ({ rec } = await getState());
-    check(Boolean(idle), '按停止後回到待命');
+    check(Boolean(idle), '按停止後馬上回到待命（不等還沒播到的句子翻完）');
     const n = rec.segments.length;
     await sleep(3000);
-    check((await getState()).rec.segments.length === n, '停止後不再收字幕');
+    check((await getState()).rec.segments.length === n, '停止後文字稿不再變');
     check(!(await evaluate(page, `!!document.querySelector('tab-transcriber-caption')`)), '停止後網頁字幕拿掉了');
+    check((await ccState()) === 'false', '停止後插件打開的 CC 關回去了');
+
+    log('使用者自己開著 CC 再錄一次');
+    await evaluate(page, `document.querySelector('.ytp-subtitles-button').click()`);
+    await sleep(500);
+    await cdp('Extensions.triggerAction', { id, targetId: tab.targetId });
+    await until(async () => ((await getState()).state.status === 'recording' ? true : null), 8000);
+    await sleep(3000);
+    await evaluate(panel, `document.getElementById('toggle').click()`);
+    await until(async () => ((await getState()).state.status === 'idle' ? true : null), 10000);
+    await sleep(500);
+    check((await ccState()) === 'true', '使用者自己開的 CC，停止後還開著');
   }
 } catch (err) {
   log('ERROR', err.message);

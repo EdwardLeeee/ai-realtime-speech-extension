@@ -12,14 +12,15 @@
       {"type": "partial", "id": 4, "offset": 20.1, "pcm": "..."}（還沒講完的一句，即時字幕）
       {"type": "translate", "enabled": true}（錄音中打開或關掉雙語字幕）
       {"type": "hints", "text": "..."}（錄音中改了專有名詞）
-      {"type": "text", "segments": [{"start": 12.9, "end": 15.1, "text": "..."}]}（YouTube 字幕模式：要翻譯的字幕）
-      {"type": "language", "language": "en"}（YouTube 字幕模式：知道字幕的語言了，決定湊句子的方式）
+      {"type": "text", "tag": "dQw4w9WgXcQ#1", "replace": false, "segments": [{"start": 12.9, "end": 15.1, "text": "..."}]}
+        （YouTube 字幕模式：插件已經照句子湊好，每段直接翻；replace 時先丟掉還在排隊沒翻的，tag 原樣放回譯文）
       {"type": "flush"}（錄音停了：手上還沒翻的句子翻完後回 flushed）
   送  {"type": "status", "state": "loading" | "ready", "model": ..., "device": ..., "language": ...}
       {"type": "segments", "id": 3, "segments": [{"start": 12.9, "end": 15.1, "text": "..."}], "elapsed": 1.2}
       {"type": "partial", "id": 4, "offset": 20.1, "text": "..."}（失敗時 text 為空字串）
       {"type": "translator", "state": "loading" | "ready" | "off" | "error", "device": "gpu" | "cpu", "message": ...}
-      {"type": "translation", "start": 12.9, "text": "..."}（一組句子的譯文；start 是這組最後一句的開始時間）
+      {"type": "translation", "start": 12.9, "tag": ..., "text": "..."}（一組句子的譯文；start 是這組最後一句的開始時間，
+        tag 只有字幕模式才有）
       {"type": "partial-translation", "id": 4, "text": "..."}（即時字幕的譯文）
       {"type": "flushed"}
       {"type": "error", "id": 3, "message": "..."}
@@ -308,7 +309,7 @@ class Translator:
         self.enabled = False
         self.closed = False
         self.generation = 0  # 每次關掉就加一，關掉前排隊或翻到一半的結果都丟掉
-        self.finals = deque()  # ("unit", 最後一段的 start, 原文) 或 ("flush",)
+        self.finals = deque()  # ("unit", 最後一段的 start, tag, 原文) 或 ("flush",)
         self.held = []  # 還沒等到句尾的定稿 [(start, text)]
         self.held_at = 0.0
         self.partial = None  # (id, text)
@@ -348,6 +349,17 @@ class Translator:
             self.held_at = time.monotonic()
             self.cv.notify()
 
+    def add_texts(self, segments, tag, replace):
+        """YouTube 字幕模式：插件照句子湊好的字幕。replace 是使用者拖了進度條，排隊中還沒翻的先丟掉（翻到一半的照樣送回）。"""
+        with self.cv:
+            if not self.enabled:
+                return
+            if replace:
+                self.finals = deque(job for job in self.finals if job[0] != "unit")
+            for seg in segments:
+                self.finals.append(("unit", seg["start"], tag, seg["text"]))
+            self.cv.notify()
+
     def add_partial(self, msg_id, text):
         if not text or not self.partials:
             return
@@ -376,7 +388,7 @@ class Translator:
     def _release(self):
         if self.held:
             text = JOINERS.get(self.language, " ").join(t for _, t in self.held)
-            self.finals.append(("unit", self.held[-1][0], text))
+            self.finals.append(("unit", self.held[-1][0], None, text))
             self.held = []
 
     def _next_job(self):
@@ -426,7 +438,8 @@ class Translator:
                 if generation != self.generation or text is None:
                     return
             if kind == "unit":
-                send({"type": "translation", "start": job[1], "text": text})
+                tag = {"tag": job[2]} if job[2] is not None else {}
+                send({"type": "translation", "start": job[1], **tag, "text": text})
             else:
                 send({"type": "partial-translation", "id": job[1], "text": text})
 
@@ -617,7 +630,7 @@ def main():
     start = first if first.get("type") == "start" else {}
     language = start.get("language", "en")
     if start.get("whisper", True) is False:
-        # YouTube 字幕模式：文字由插件送來，只翻譯。字幕的語言什麼都有，認不得的就一行一行翻（同泰文）。
+        # YouTube 字幕模式：文字由插件照句子湊好送來，只翻譯。語言只記在 log 裡。
         model, name, device = None, "none", ""
         language = base_language(language)
     elif language not in LANGUAGES:
@@ -655,13 +668,11 @@ def run(model, config, language, translator, first):
             hints = clip_hints(model, msg.get("text")) if model else ""
             log.info("hints chars=%d", len(hints))
             continue
-        if kind == "text":  # YouTube 字幕模式：插件送來的字幕，只翻譯
+        if kind == "text":  # YouTube 字幕模式：插件照句子湊好的字幕，只翻譯
             segments = [s for s in msg.get("segments", []) if isinstance(s, dict) and s.get("text")]
-            log.info("captions segments=%d", len(segments))
-            translator.add_segments(segments)
-            continue
-        if kind == "language":
-            translator.language = base_language(msg.get("language"))
+            replace = bool(msg.get("replace"))
+            log.info("captions segments=%d replace=%d", len(segments), replace)
+            translator.add_texts(segments, msg.get("tag"), replace)
             continue
         if kind == "translate":
             translator.set_enabled(bool(msg.get("enabled")))

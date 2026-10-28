@@ -11,8 +11,10 @@
 // 即時字幕（還沒講完的那一句）每秒更新，不寫 storage，直接用 runtime 訊息 { type: 'caption' } 推給側邊欄，
 // 它的譯文用 { type: 'caption-translation' }。
 // 網頁字幕（caption-overlay.js）注入在被錄的分頁裡，用 tabs.sendMessage 推上一句定稿和正在講的這一句；
-// YouTube 字幕：yt-caption-hook.js（頁面的 world）看播放器自己抓的字幕檔，yt-caption-bridge.js 照影片播放時間
-// 把每一句用 { type: 'yt-cue' } 送來；這時不開錄音頁、不載入 Whisper，本機程式只在雙語字幕開著時負責翻譯。
+// YouTube 字幕：yt-caption-hook.js（頁面的 world）看播放器自己抓的字幕檔，yt-caption-bridge.js 把整份交過來
+// （{ type: 'yt-track' }），一開始就整份放進文字稿；之後照影片播放時間用 { type: 'yt-cue' } 說現在播到哪一句，
+// 網頁字幕和側邊欄跟著走（state.now）。這時不開錄音頁、不載入 Whisper，本機程式只在雙語字幕開著時負責翻譯：
+// 先翻好現在這一句之後 LOOKAHEAD_S 秒內的句子，拖了進度條就改翻新的位置。
 // 分頁換頁（整頁重新載入）後原本的字幕框就不見了，載入完再注入一次。換頁不會讓分頁錄音結束（2026-10 Brave 155 實測，
 // 同網站、換網站、brave:// 頁都一樣），所以錄音照常，只要補字幕框。
 
@@ -21,7 +23,11 @@ const OFFSCREEN_URL = 'offscreen.html';
 const HOST_CONNECT_TIMEOUT_MS = 15_000;
 const STOP_TIMEOUT_MS = 120_000;
 const HOST_LOG = '~/.cache/tab-transcriber/host.log';
-const CC_WAIT_MS = 10_000; // YouTube 字幕模式開始後這麼久還沒收到字幕，就提示打開 CC
+const CC_WAIT_MS = 10_000; // YouTube 字幕模式開始（或換影片）後這麼久還沒收到字幕，就提示打開 CC
+const LOOKAHEAD_S = 60; // YouTube 字幕模式：先翻好影片接下來這麼多秒的字幕
+// 和本機程式湊句子的規則一樣（transcriber_host.py 的 SENTENCE_END）：英文、日文等到句尾，最多三句一組；其他語言一句一組
+const SENTENCE_END = { en: /[.?!…]["')\]]*$/, ja: /[。？！?!」』）…]$/ };
+const MAX_UNIT_CUES = 3;
 
 const IDLE = {
   status: 'idle', // idle | starting | recording | stopping | error
@@ -38,10 +44,12 @@ const IDLE = {
   translator: null, // null（雙語字幕關著）| loading | ready
   translatorDevice: '', // gpu | cpu
   source: '', // whisper | youtube（YouTube 字幕）
+  now: null, // YouTube 字幕模式：影片現在播到的那一句 { videoId, start }，側邊欄標出來
 };
 
 let port = null; // 和本機程式的連線，只在錄音期間存在
 let rec = null; // 目前這次錄音 { id, tabId, pending, stopping, captureDone, lastFinalId, partialInFlight, queuedPartial, translate, flushPending, overlay, lines }
+// YouTube 字幕模式另外有 { captions, videos, videoId, now, trackSeq, trWrites, trTimer, ccTimer, closeCaptions }
 let stopTimer = null;
 let writes = Promise.resolve(); // 依序寫 storage，避免同時讀改寫互相蓋掉
 
@@ -106,10 +114,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ active: Boolean(rec?.captions && !rec.stopping && sender.tab?.id === rec.tabId) });
       break;
     case 'yt-track':
-      if (rec?.captions && sender.tab?.id === rec.tabId) onTrack(msg);
+      if (rec?.captions && !rec.stopping && sender.tab?.id === rec.tabId) onTrack(msg);
       break;
     case 'yt-cue':
-      if (rec?.captions && sender.tab?.id === rec.tabId) onCue(msg);
+      if (rec?.captions && !rec.stopping && sender.tab?.id === rec.tabId) onCue(msg);
+      break;
+    case 'yt-video':
+      if (rec?.captions && !rec.stopping && sender.tab?.id === rec.tabId) onVideo(msg);
+      break;
+    case 'yt-cc': // CC 是插件幫忙打開的，停止時關回去
+      if (rec?.captions && sender.tab?.id === rec.tabId) rec.closeCaptions = true;
       break;
     case 'start':
       chrome.tabs.query({ active: true, windowId: msg.windowId }).then(([tab]) => tab && start(tab));
@@ -204,7 +218,13 @@ async function start(tab) {
 async function startCaptions(tab, track) {
   const { id } = rec;
   rec.captions = true;
-  rec.cueKeys = new Set(); // 這次錄音收過的句子（影片|開始時間），網頁重新整理後重送的會擋掉
+  rec.videos = new Map(); // videoId → 這部影片的字幕（makeVideo）
+  rec.videoId = null; // 分頁現在的影片
+  rec.now = null; // 現在播到的那一句 { videoId, index }
+  rec.trackSeq = 0;
+  rec.trWrites = []; // 還沒寫進 storage 的譯文
+  rec.trTimer = null;
+  rec.closeCaptions = false;
   const lang = track?.lang ?? '';
   try {
     await connectHost();
@@ -218,11 +238,7 @@ async function startCaptions(tab, track) {
     );
     await setState({ status: 'recording', startedAt, source: 'youtube', model: ccLabel(track), device: '' });
     await chrome.tabs.sendMessage(tab.id, { target: 'yt-captions', type: 'start' }, { frameId: 0 });
-    rec.ccTimer = setTimeout(() => {
-      if (rec?.id === id && !rec.cueKeys.size) {
-        setState({ message: '還沒收到 YouTube 字幕：請在播放器打開 CC。已經打開的話，重新整理網頁或換一次字幕語言。' });
-      }
-    }, CC_WAIT_MS);
+    armCaptionsPrompt();
     const { overlay = true } = await chrome.storage.local.get('overlay');
     setOverlay(overlay);
   } catch (err) {
@@ -235,35 +251,162 @@ function ccLabel(track) {
   return `YouTube ${track.asr ? '自動字幕' : '字幕'}${track.lang ? `（${track.lang}）` : ''}`;
 }
 
+// 開始或換影片後 CC_WAIT_MS 還沒拿到這部影片的字幕，就提示（CC 是插件幫忙按的，按不到或影片本來就沒有字幕都會走到這裡）
+function armCaptionsPrompt() {
+  clearTimeout(rec.ccTimer);
+  const { id } = rec;
+  rec.ccTimer = setTimeout(() => {
+    if (rec?.id === id && !rec.stopping && !rec.videos.has(rec.videoId)) {
+      setState({ message: '還沒收到 YouTube 字幕：這部影片可能沒有字幕。有的話，請在播放器打開 CC；已經打開的話，重新整理網頁或換一次字幕語言。' });
+    }
+  }, CC_WAIT_MS);
+}
+
+// 一部影片的字幕：cues 照時間排；units 是一起翻的幾句（譯文放在最後一句），unitOf[i] 是第 i 句屬於哪一組；
+// tr 是已經翻好的組 → 譯文，queued 是已經交給本機程式、還沒翻回來的組。tag 每換一次字幕就換，晚到的舊譯文會認得出來。
+function makeVideo(videoId, track, cues) {
+  const base = track.lang.split('-')[0].toLowerCase();
+  const end = SENTENCE_END[base];
+  const units = [];
+  const unitOf = [];
+  let first = 0;
+  cues.forEach((c, i) => {
+    unitOf.push(units.length);
+    if (!end || end.test(c.text) || i - first + 1 >= MAX_UNIT_CUES || i === cues.length - 1) {
+      const text = cues.slice(first, i + 1).map((x) => x.text).join(base === 'ja' ? '' : ' ');
+      units.push({ first, last: i, text });
+      first = i + 1;
+    }
+  });
+  return { id: videoId, lang: track.lang, asr: track.asr, cues, units, unitOf, tr: new Map(), queued: new Set(),
+    tag: `${videoId}#${++rec.trackSeq}` };
+}
+
+// 拿到整份字幕：放進文字稿（一開始就是整部影片），同一部影片換了字幕語言就換掉它原本的那幾行。
 function onTrack(msg) {
-  setState({ model: ccLabel(msg), message: '' });
-  if (port && msg.lang) port.postMessage({ type: 'language', language: msg.lang });
+  const { videoId } = msg;
+  const cues = (msg.cues ?? []).filter((c) => Number.isFinite(c?.start) && c.text).sort((a, b) => a.start - b.start);
+  if (!videoId || !cues.length) return;
+  const track = { lang: String(msg.lang ?? ''), asr: Boolean(msg.asr) };
+  const old = rec.videos.get(videoId);
+  // 同一份字幕又抓了一次（重新整理網頁、換畫質）：一樣就不動，譯文留著
+  if (old && old.lang === track.lang && old.asr === track.asr && old.cues.length === cues.length &&
+      old.cues.every((c, i) => c.start === cues[i].start && c.text === cues[i].text)) return;
+  writeTranslations(); // 先寫掉舊字幕手上的譯文，免得寫到新字幕同一個時間的句子
+  const video = makeVideo(videoId, track, cues);
+  rec.videos.set(videoId, video);
+  clearTimeout(rec.ccTimer);
+  setState({ model: ccLabel(track), message: '' });
   const recId = rec.id;
   updateRecordings((list) => {
     const r = list.find((x) => x.id === recId);
-    if (r && msg.lang) r.language = msg.lang;
+    if (!r) return;
+    if (track.lang) r.language = track.lang;
+    const segs = cues.map((c) => ({ start: c.start, end: c.end, text: c.text, videoId }));
+    const at = r.segments.findIndex((s) => s.videoId === videoId);
+    const rest = r.segments.filter((s) => s.videoId !== videoId);
+    r.segments = at < 0 ? [...rest, ...segs] : [...rest.slice(0, at), ...segs, ...rest.slice(at)];
   });
+  // 換了字幕語言：現在的位置換成新字幕裡同一個時間的那一句，從那裡開始翻（bridge 接著也會重送現在這一句）
+  if (rec.now?.videoId === videoId) {
+    const t = old.cues[rec.now.index].start;
+    const index = cues.findLastIndex((c) => c.start <= t);
+    rec.now = index < 0 ? null : { videoId, index };
+  }
+  feedTranslator(true);
+}
+
+function onVideo(msg) {
+  rec.videoId = msg.videoId;
+  rec.now = null;
+  rec.lines = { prev: null, live: null };
+  pushOverlay();
+  const video = rec.videos.get(msg.videoId);
+  setState({ now: null, ...(video ? { model: ccLabel(video) } : {}) });
+  if (!video) armCaptionsPrompt();
 }
 
 function onCue(msg) {
-  const key = `${msg.videoId}|${msg.start}`;
-  if (rec.stopping || rec.cueKeys.has(key)) return;
-  if (!rec.cueKeys.size) setState({ message: '' });
-  rec.cueKeys.add(key);
-  const seg = { start: msg.start, end: msg.end, text: msg.text };
-  const recId = rec.id;
-  updateRecordings((list) => list.find((r) => r.id === recId)?.segments.push(seg));
-  // 網頁字幕：上一句和現在這一句（YouTube 字幕一出來就是整句，沒有「還沒講完」的即時字幕）
-  rec.lines.prev = rec.lines.live;
-  rec.lines.live = { start: seg.start, text: seg.text, tr: '' };
+  const video = rec.videos.get(msg.videoId);
+  if (!video) return;
+  const index = msg.start === null ? -1 : video.cues.findIndex((c) => c.start === msg.start);
+  rec.now = index < 0 ? null : { videoId: msg.videoId, index };
+  setState({ now: rec.now && { videoId: msg.videoId, start: msg.start } });
+  showCues();
+  feedTranslator(Boolean(msg.seeked));
+}
+
+// 網頁字幕：影片現在這一句和前一句。一組句子的譯文一開始就看得到，放在這一組最下面那一行。
+function showCues() {
+  const video = rec.videos.get(rec.now?.videoId);
+  if (!video) {
+    rec.lines = { prev: null, live: null };
+    return pushOverlay();
+  }
+  const i = rec.now.index;
+  const line = (k, tr) => ({ start: video.cues[k].start, text: video.cues[k].text, tr: tr ? video.tr.get(video.unitOf[k]) ?? '' : '' });
+  rec.lines = {
+    prev: i > 0 ? line(i - 1, video.unitOf[i - 1] !== video.unitOf[i]) : null,
+    live: line(i, true),
+  };
   pushOverlay();
-  if (rec.translate && port) port.postMessage({ type: 'text', segments: [seg] });
+}
+
+// 先翻好現在這一句之後 LOOKAHEAD_S 秒內還沒翻的組。拖了進度條（或剛開始、剛換字幕）就請本機程式丟掉排隊中的，
+// 照新的位置重排；連續播放時只補新進到範圍裡的。
+function feedTranslator(replace) {
+  if (!rec?.captions || !rec.translate || !port || rec.stopping) return;
+  const video = rec.videos.get(rec.now?.videoId ?? rec.videoId);
+  if (!video) return;
+  if (replace) for (const v of rec.videos.values()) v.queued.clear();
+  const from = rec.now ? video.unitOf[rec.now.index] : 0;
+  const until = (rec.now ? video.cues[rec.now.index].start : 0) + LOOKAHEAD_S;
+  const send = [];
+  for (let k = from; k < video.units.length && video.cues[video.units[k].first].start <= until; k++) {
+    if (!video.tr.has(k) && !video.queued.has(k)) send.push(k);
+  }
+  if (!send.length && !replace) return;
+  for (const k of send) video.queued.add(k);
+  const segments = send.map((k) => {
+    const last = video.cues[video.units[k].last];
+    return { start: last.start, end: last.end, text: video.units[k].text };
+  });
+  port.postMessage({ type: 'text', tag: video.tag, replace, segments });
+}
+
+function onCaptionTranslation(msg) {
+  const video = [...rec.videos.values()].find((v) => v.tag === msg.tag);
+  const k = video?.units.findIndex((u) => video.cues[u.last].start === msg.start) ?? -1;
+  if (k < 0) return; // 換字幕語言以前送出的
+  video.queued.delete(k);
+  video.tr.set(k, msg.text);
+  rec.trWrites.push({ videoId: video.id, start: msg.start, text: msg.text });
+  rec.trTimer ??= setTimeout(writeTranslations, 300);
+  if (rec.now?.videoId === video.id) showCues();
+  feedTranslator(false);
+}
+
+// 譯文一次可能回來好幾組，集中起來寫 storage（每次都整份重寫）
+function writeTranslations() {
+  if (!rec?.captions) return;
+  clearTimeout(rec.trTimer);
+  rec.trTimer = null;
+  const items = rec.trWrites.splice(0);
+  if (!items.length) return;
+  const recId = rec.id;
+  updateRecordings((list) => {
+    const segments = list.find((r) => r.id === recId)?.segments ?? [];
+    for (const it of items) {
+      const seg = segments.find((s) => s.videoId === it.videoId && s.start === it.start);
+      if (seg) seg.translation = it.text;
+    }
+  });
 }
 
 function stop() {
   if (!rec || rec.stopping) return;
   if (rec.captions) {
-    chrome.tabs.sendMessage(rec.tabId, { target: 'yt-captions', type: 'stop' }, { frameId: 0 }).catch(() => {});
+    stopBridge();
     onCaptureDone('stopped');
     return;
   }
@@ -284,7 +427,8 @@ function onCaptureDone(reason) {
   }
   rec.captureDone = true;
   // 錄音頁的最後一段已經比 'stopped' 先送進本機程式，所以 flush 一定排在所有定稿後面。
-  if (rec.translate && port) {
+  // YouTube 字幕模式不等：排隊的是還沒播到的句子，停了就不用翻。
+  if (rec.translate && port && !rec.captions) {
     rec.flushPending = true;
     port.postMessage({ type: 'flush' });
   }
@@ -296,7 +440,12 @@ function setTranslate(on) {
   if (!rec || !port || rec.stopping || rec.translate === on) return;
   rec.translate = on;
   port.postMessage({ type: 'translate', enabled: on });
-  if (!on) sendCaptionTranslation(null);
+  if (rec.captions) {
+    if (on) feedTranslator(true);
+    else for (const v of rec.videos.values()) v.queued.clear(); // 本機程式關掉翻譯時把排隊的都丟了
+  } else if (!on) {
+    sendCaptionTranslation(null);
+  }
   pushOverlay();
   setState({ translator: on ? 'loading' : null, translatorDevice: '' });
 }
@@ -391,6 +540,8 @@ function onHostMessage(msg) {
     } else if (rec.translate && msg.state !== 'off') {
       setState({ translator: msg.state, translatorDevice: msg.device ?? '' });
     }
+  } else if (msg.type === 'translation' && rec.captions) {
+    onCaptionTranslation(msg);
   } else if (msg.type === 'translation') {
     const recId = rec.id;
     updateRecordings((list) => {
@@ -429,9 +580,15 @@ function maybeFinish() {
   if (rec?.stopping && rec.captureDone && rec.pending === 0 && !rec.flushPending) finish();
 }
 
+function stopBridge() {
+  chrome.tabs.sendMessage(rec.tabId, { target: 'yt-captions', type: 'stop', closeCaptions: rec.closeCaptions },
+    { frameId: 0 }).catch(() => {});
+}
+
 async function finish(message) {
   clearTimeout(stopTimer);
   clearTimeout(rec?.ccTimer);
+  writeTranslations();
   if (rec) removeOverlay(rec.tabId);
   port?.disconnect();
   port = null;
@@ -447,7 +604,8 @@ async function finish(message) {
 async function fail(message) {
   clearTimeout(stopTimer);
   clearTimeout(rec?.ccTimer);
-  if (rec?.captions) chrome.tabs.sendMessage(rec.tabId, { target: 'yt-captions', type: 'stop' }, { frameId: 0 }).catch(() => {});
+  writeTranslations();
+  if (rec?.captions) stopBridge();
   if (rec) removeOverlay(rec.tabId);
   port?.disconnect();
   port = null;
