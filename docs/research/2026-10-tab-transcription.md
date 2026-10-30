@@ -610,6 +610,19 @@ Whisper 碰到配樂或歌聲時，常會一直重複同一句，直到產生上
 - 和翻譯用的 llama.cpp 同一套 ggml，Vulkan 驅動夠新的 A 卡、Intel 顯示卡都能用。whisper.cpp v1.9.5（2026-10-06）的 GitHub Release 沒有附任何編好的檔案（`gh release view` 看到 0 個），要自己在 CI 編；模型要換成 ggml 格式，轉文字那一段等於重寫，切段、即時字幕、重複縮短都要重新驗證。
 
 
+## 16. Windows 安裝檔：一般使用者卡在 uv sync（issue #1，2026-10-30）
+
+使用者：「你看一下issue ，一般用戶直接跑你的.exe有問題。我希望你修掉這個bug。……記得跑一下用一般用戶權限是不是能正常下載」。
+
+- 症狀（issue #1，Windows 10 22H2、0.6.4）：Setup 停在「建立 Python 環境…」，`install.log`：uv 查 `%APPDATA%\uv\python\cpython-3.12-windows-x86_64-none\python.exe` 時 `os error 448`（路徑含未受信任的掛接點）。
+- 原因：Inno Setup 6.7.0 起 Setup 預設開著 RedirectionGuard，不走一般使用者帳號建的 junction，子程式都會繼承。uv 安裝 managed Python 會建 `cpython-3.12-…` → `cpython-3.12.x-…` 的 junction。GitHub Actions 的 Windows 測試機是提升權限的系統管理員，建的 junction 算可信，所以一直綠燈。
+- 重現：`tests/windows_as_user.ps1` 建一般權限帳號 `ttuser`（`net user`、`secedit` 給「以批次工作登入」），用排程工作（`-RunLevel Limited`）以它的身分跑 Setup.exe、`test_native_host.py`、解除安裝；不用 `Start-Process -Credential`，因為它會帶著系統管理員的環境變數。測試機有系統的 Python，所以設 `UV_PYTHON_PREFERENCE=only-managed`，和使用者電腦一樣讓 uv 下載自己的 Python。CI 紀錄印出 `ttuser  C:\Users\ttuser\AppData\Local  Mandatory Label\Medium Mandatory Level`。舊安裝檔（run 41010140528）：`Failed to create Python minor version link directory … (os error 448)`，Setup.exe 回 10（新加的 `GetCustomSetupExitCode`；以前 install.ps1 失敗時結束碼照樣是 0）。
+- issue 建議的 `ExecAsOriginalUser`（run 41012166655）照樣 448：Inno 說明寫用原使用者身分啟動的子程式不繼承，但 6.7.4 更新說明寫 Setup 不需要系統管理員權限時仍會繼承；這個安裝檔是 `PrivilegesRequired=lowest`，沒有另一個原使用者程序，它就等於 `Exec`。已撤回。
+- 修法：`[Setup]` 加 `RedirectionGuard=no`（`#if VER >= EncodeVer(6, 7, 0)` 包起來，舊版 ISCC 不認得這個設定）。這個保護是防止提升權限的安裝程式被一般使用者建的 junction 騙去改受保護的位置；這個安裝檔不提升權限、只裝在使用者自己的資料夾，關掉不會讓任何程式多拿到權限。Claude Code 的 auto mode 把這個改動判成「降低安全性」擋下，使用者 2026-10-30 同意後才改。uv 沒有關掉 minor version junction 的設定（另一條路是安裝檔自己下載 Python，不用 uv 管理的，改動大，沒有做）。
+- 沒查清楚：微軟的說明只寫「由非系統管理員帳號建立的 junction」，系統管理員帳號在 UAC 下沒提升權限時建的 junction 算不算，原文沒有寫，所以 README 只說一般使用者帳號會遇到。
+- 修好後還沒在使用者的實機上重裝，只在 CI 的一般使用者帳號上驗證。
+
+
 ## 附錄
 
 ### 量測工具與重現
