@@ -27,6 +27,13 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayName=Tab Transcriber（AI 即時語音辨識插件）
+; Inno Setup 6.7 起預設開著 RedirectionGuard：不走一般使用者建的 junction，而且 Setup 啟動的子程式都會繼承。
+; install.ps1 裡的 uv 會在 %APPDATA%\uv\python 建 cpython-3.12 junction 再走它，被擋下就是 os error 448（issue #1）。
+; ExecAsOriginalUser 只有 Setup 提升了權限時才不繼承（6.7.4 更新說明；CI 用一般使用者實測也一樣被擋）。
+; 這個安裝檔不提升權限、只裝在使用者自己的資料夾，關掉不會讓任何程式多拿到權限（2026-10-30 使用者同意）。
+#if VER >= EncodeVer(6, 7, 0)
+RedirectionGuard=no
+#endif
 
 [Languages]
 #ifdef HaveChinese
@@ -90,6 +97,12 @@ begin
     ExpandConstant('{app}'), ShowCmd, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
   if not InstallOk then
     SuppressibleMsgBox(FmtMessage(CustomMessage('Failed'), [ExpandConstant('{app}\install.log')]), mbError, MB_OK, IDOK);
+end;
+
+// install.ps1 失敗時 Setup.exe 回 10（不是 0），靜默安裝和 CI 才看得出來
+function GetCustomSetupExitCode: Integer;
+begin
+  if InstallOk then Result := 0 else Result := 10;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);

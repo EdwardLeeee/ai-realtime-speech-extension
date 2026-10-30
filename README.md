@@ -26,7 +26,7 @@ The extension's interface is in Traditional Chinese; this README gives the Chine
 
 - Windows 10/11 x64, an Apple Silicon Mac (M1 or later) with macOS 14+, or Linux x86-64.
   - The author uses it on Ubuntu (RTX 2060 6 GB).
-  - Windows: GitHub's test machines install it as a standard (non-administrator) user and test transcription and translation (on the CPU, no discrete GPU). Not yet tested on users' computers.
+  - Windows: GitHub's test machines install it as a standard (non-administrator) user and test transcription and translation (on the CPU, no discrete GPU). It was installed once on a real Windows 10 PC, which found the 0.6.4 installer problem described below; 0.7.0 fixes it but has not been reinstalled on real hardware yet.
   - macOS has only been tested on GitHub's test machines (install, transcription and translation), not yet on users' computers.
 - Brave, Chrome, Chromium or Edge (tested on Brave 155).
 - An NVIDIA GPU (Windows, Linux) makes it much faster and enables the large-v3-turbo model; without one the small model runs on the CPU, slower and with more mistakes. On a Mac, Whisper runs on the CPU and the translation model uses the Mac's GPU.
@@ -38,6 +38,7 @@ The extension's interface is in Traditional Chinese; this README gives the Chine
 **Windows**: download **[TabTranscriberSetup.exe](https://github.com/EdwardLeeee/ai-realtime-speech-extension/releases/latest/download/TabTranscriberSetup.exe)**, double-click it and click through the wizard.
 
 - No administrator rights or other software needed (it installs uv, which manages the Python environment, by itself).
+- The 0.6.4 installer stops at "建立 Python 環境…" (setting up the Python environment) on standard (non-administrator) accounts, with `os error 448` in `install.log` ([issue #1](https://github.com/EdwardLeeee/ai-realtime-speech-extension/issues/1)). 0.7.0 fixes this; download the new version and run it again.
 - A separate window shows download progress: the Whisper and translation models are 2–5 GB, about 5–15 minutes the first time.
 - The installer isn't code-signed, so Windows may show "Windows protected your PC": click "More info" → "Run anyway".
 - Uninstall later from Settings → Apps.
@@ -184,6 +185,7 @@ The translation model can be changed too: set `"translate_model"` to the full pa
 | 本機轉文字程式意外結束 (local speech-to-text program exited unexpectedly) | Check the last lines of `~/.cache/tab-transcriber/host.log` (Windows: `%USERPROFILE%\.cache\tab-transcriber\host.log`) |
 | 翻譯模型還沒安裝 (translation model not installed) | Run `install.sh` once (without `--no-translate`), then turn on bilingual captions |
 | 翻譯模型啟動失敗 (translation model failed to start) | Check the last lines of `~/.cache/tab-transcriber/llama-server.log` |
+| The Windows installer says setup did not finish, with `os error 448` in `install.log` | Only the 0.6.4 installer does this; download the new version and run it again |
 
 ## Uninstall
 

@@ -1,7 +1,9 @@
 # 三個平台的安裝測試：
 #   unit     Linux，不需要模型的單元測試
 #   macos    Apple Silicon，install.sh → 照瀏覽器的方式啟動本機程式轉文字、翻譯（tests/test_native_host.py）
-#   windows  編出 TabTranscriberSetup.exe → 靜默安裝 → 同一個測試 → 解除安裝；推 v* tag 時把 Setup.exe 放上 Release
+#   windows  編出 TabTranscriberSetup.exe → 用一般使用者帳號靜默安裝 → 同一個測試 → 解除安裝；推 v* tag 時把 Setup.exe 放上 Release
+#            測試機本身是系統管理員，一般使用者才會遇到的問題（issue #1）在那裡看不到，所以安裝和測試都用
+#            tests/windows_as_user.ps1 建的一般權限帳號執行。
 #            這裡的步驟用 pwsh：Windows PowerShell 5.1 會把沒有 BOM 的步驟腳本當系統字碼頁讀，中文字串會壞掉。
 #            Setup.exe 執行 install.ps1 時照樣用使用者電腦上的 Windows PowerShell 5.1。
 # 測試機都沒有 NVIDIA 顯示卡，Whisper 用 CPU 跑。
@@ -59,35 +61,50 @@ jobs:
         with:
           name: TabTranscriberSetup
           path: installer/Output/TabTranscriberSetup.exe
-      - name: 靜默安裝（和使用者點兩下 Setup.exe 一樣執行 install.ps1）
+      - name: 建一般使用者（不是系統管理員）
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Continue'  # 原生程式寫 stderr 不算失敗，只看結束碼
-          $p = Start-Process installer\Output\TabTranscriberSetup.exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/LOG=setup.log' -Wait -PassThru
-          Get-Content setup.log -Tail 15
+          ./tests/windows_as_user.ps1 -Create
+          # 使用者的電腦通常沒有 Python，uv 會下載自己管理的 Python 並建 junction（issue #1 就卡在走這個 junction）；
+          # 測試機上有系統的 Python，所以要 uv 只用自己管理的
+          [Environment]::SetEnvironmentVariable('UV_PYTHON_PREFERENCE', 'only-managed', 'Machine')
+      - name: 以一般使用者靜默安裝（和使用者點兩下 Setup.exe 一樣執行 install.ps1）
+        shell: pwsh
+        run: |
+          ./tests/windows_as_user.ps1 -Command @'
+          # 用的是哪個帳號、有沒有提升權限（Medium Mandatory Level 就是一般權限）
+          Write-Output "$(whoami)  $env:LOCALAPPDATA  $((whoami /groups | Select-String 'Mandatory Level') -replace '\s{2,}.*$', '')"
+          $p = Start-Process '{workspace}\installer\Output\TabTranscriberSetup.exe' -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/LOG=C:\tt-shared\setup.log' -Wait -PassThru
+          Get-Content C:\tt-shared\setup.log -Tail 15
           Get-Content "$env:LOCALAPPDATA\Programs\TabTranscriber\install.log" -Tail 30 -ErrorAction SilentlyContinue
-          if ($p.ExitCode -ne 0) { throw "Setup.exe 結束碼 $($p.ExitCode)" }
+          Write-Output "Setup.exe 結束碼 $($p.ExitCode)"
+          exit $p.ExitCode
+          '@
       - name: 本機程式（native messaging）
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Continue'  # 原生程式寫 stderr 不算失敗，只看結束碼
+          ./tests/windows_as_user.ps1 -Command @'
+          Set-Location '{workspace}'
           $py = "$env:LOCALAPPDATA\Programs\TabTranscriber\host\.venv\Scripts\python.exe"
           & $py tests\test_native_host.py
-          if ($LASTEXITCODE -ne 0) { throw 'test_native_host 失敗' }
+          if ($LASTEXITCODE -ne 0) { Write-Output 'test_native_host 失敗'; exit 1 }
           & $py -m unittest tests/test_repeats.py tests/test_hints.py tests/test_caption_queue.py
-          if ($LASTEXITCODE -ne 0) { throw '單元測試失敗' }
+          if ($LASTEXITCODE -ne 0) { Write-Output '單元測試失敗'; exit 1 }
+          '@
       - name: host.log
         if: always()
         shell: pwsh
-        run: Get-Content "$HOME\.cache\tab-transcriber\host.log" -Tail 40 -ErrorAction SilentlyContinue; Get-Content "$HOME\.cache\tab-transcriber\llama-server.log" -Tail 20 -ErrorAction SilentlyContinue
+        run: Get-Content C:\Users\ttuser\.cache\tab-transcriber\host.log -Tail 40 -ErrorAction SilentlyContinue; Get-Content C:\Users\ttuser\.cache\tab-transcriber\llama-server.log -Tail 20 -ErrorAction SilentlyContinue
       - name: 解除安裝
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Continue'  # 原生程式寫 stderr 不算失敗，只看結束碼
+          ./tests/windows_as_user.ps1 -Command @'
           $p = Start-Process "$env:LOCALAPPDATA\Programs\TabTranscriber\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait -PassThru
           Start-Sleep 3
-          if (Test-Path 'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.tab_transcriber.host') { throw '登錄檔沒有移除' }
-          if (Test-Path "$env:LOCALAPPDATA\Programs\TabTranscriber\host\.venv") { throw '.venv 沒有刪掉' }
+          if (Test-Path 'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.tab_transcriber.host') { Write-Output '登錄檔沒有移除'; exit 1 }
+          if (Test-Path "$env:LOCALAPPDATA\Programs\TabTranscriber\host\.venv") { Write-Output '.venv 沒有刪掉'; exit 1 }
+          Write-Output '解除安裝乾淨'
+          '@
       - name: 放上 Release（只有推 v* tag 時）
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh

@@ -24,7 +24,7 @@ Brave／Chrome 插件。把分頁正在播放的英文、日文或泰文錄音�
 
 - Windows 10／11 x64、macOS 14 以上的 Apple Silicon Mac（M1 以後），或 Linux x86-64。
   - 作者實際在 Ubuntu（RTX 2060 6 GB）上使用。
-  - Windows 版：GitHub 的測試機用一般使用者帳號（不是系統管理員）測安裝、轉文字和翻譯（沒有獨立顯示卡，用 CPU）。還沒在使用者的電腦上實測。
+  - Windows 版：GitHub 的測試機用一般使用者帳號（不是系統管理員）測安裝、轉文字和翻譯（沒有獨立顯示卡，用 CPU）。在一台 Windows 10 的電腦上實際裝過一次，找到下面說的 0.6.4 安裝問題；0.7.0 修好後還沒在實機上重裝。
   - macOS 版只在 GitHub 的測試機上測過安裝、轉文字和翻譯，還沒在使用者的電腦上實測。
 - Brave、Chrome、Chromium 或 Edge（在 Brave 155 測試）。
 - 有 NVIDIA 顯示卡（Windows、Linux）會快很多，用 large-v3-turbo 模型；沒有就用 CPU 跑 small 模型，比較慢、錯字也比較多。Mac 的 Whisper 只能用 CPU，翻譯模型會用 Mac 的顯示晶片。
@@ -39,6 +39,7 @@ Brave／Chrome 插件。把分頁正在播放的英文、日文或泰文錄音�
 - 安裝時會另外開一個視窗顯示下載進度：Whisper 和翻譯模型共 2–5 GB，第一次約 5–15 分鐘。
 - 安裝檔沒有付費的程式碼簽章，Windows 可能會跳出「Windows 已保護您的電腦」：按「其他資訊」→「仍要執行」。
 - 之後可以在「設定 → 應用程式」解除安裝。
+- 0.6.4 的安裝檔在一般使用者帳號（不是系統管理員）會停在「建立 Python 環境…」，`install.log` 寫著 `os error 448`（[issue #1](https://github.com/EdwardLeeee/ai-realtime-speech-extension/issues/1)）。0.7.0 已修好，下載新版重新安裝就可以。
 
 **macOS**：打開「終端機」，貼上：
 
@@ -182,6 +183,7 @@ cd ai-realtime-speech-extension
 | 本機轉文字程式意外結束 | 看 `~/.cache/tab-transcriber/host.log` 的最後幾行（Windows：`%USERPROFILE%\.cache\tab-transcriber\host.log`） |
 | 翻譯模型還沒安裝 | 執行一次 `install.sh`（不要加 `--no-translate`），再打開雙語字幕 |
 | 翻譯模型啟動失敗 | 看 `~/.cache/tab-transcriber/llama-server.log` 的最後幾行 |
+| Windows 安裝檔說「安裝沒有完成」，`install.log` 寫著 `os error 448` | 0.6.4 的安裝檔才會這樣，下載新版重新安裝 |
 
 ## 移除
 
