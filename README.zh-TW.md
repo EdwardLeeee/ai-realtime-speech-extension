@@ -4,9 +4,9 @@
 
 Brave／Chrome 插件。把分頁正在播放的英文、日文或泰文錄音（練習網站、YouTube、Twitch、Podcast 網頁……）轉成每句附時間的文字稿，可以再加上繁體中文的雙語字幕：
 
-![實際錄音畫面：左邊是播放中的影片，下方浮著網頁字幕（上一句和正在講的這一句，各附中文翻譯）；右邊是側邊欄的雙語文字稿和專有名詞欄位](docs/images/demo.png)
+![實際錄音畫面：左邊是播放中的影片，下方浮著網頁字幕（正在講的這一句和中文翻譯）；右邊是側邊欄的雙語文字稿、專有名詞欄位和各個開關](docs/images/demo.png)
 
-<sub>實測畫面（RTX 2060，large-v3-turbo，雙語字幕開著）。畫面中的影片：*Tears of Steel* © Blender Foundation | [mango.blender.org](https://mango.blender.org)，[CC BY 3.0](https://creativecommons.org/licenses/by/3.0/)。</sub>
+<sub>實測畫面（RTX 2060，large-v3-turbo，雙語字幕開著；`tools/demo_screenshot.mjs` 截的）。畫面中的影片：*Tears of Steel* © Blender Foundation | [mango.blender.org](https://mango.blender.org)，[CC BY 3.0](https://creativecommons.org/licenses/by/3.0/)。</sub>
 
 ```
 [00:00] They must go by the mail, she thought, and how funny it'll seem to send shoes to one's own feet, how odd the address will look.
@@ -24,7 +24,8 @@ Brave／Chrome 插件。把分頁正在播放的英文、日文或泰文錄音�
 
 - Windows 10／11 x64、macOS 14 以上的 Apple Silicon Mac（M1 以後），或 Linux x86-64。
   - 作者實際在 Ubuntu（RTX 2060 6 GB）上使用。
-  - Windows 和 macOS 版目前只在 GitHub 的測試機上測過安裝、轉文字和翻譯（沒有獨立顯示卡，用 CPU），還沒在使用者的電腦上實測。
+  - Windows 版：GitHub 的測試機用一般使用者帳號（不是系統管理員）測安裝、轉文字和翻譯（沒有獨立顯示卡，用 CPU）。還沒在使用者的電腦上實測。
+  - macOS 版只在 GitHub 的測試機上測過安裝、轉文字和翻譯，還沒在使用者的電腦上實測。
 - Brave、Chrome、Chromium 或 Edge（在 Brave 155 測試）。
 - 有 NVIDIA 顯示卡（Windows、Linux）會快很多，用 large-v3-turbo 模型；沒有就用 CPU 跑 small 模型，比較慢、錯字也比較多。Mac 的 Whisper 只能用 CPU，翻譯模型會用 Mac 的顯示晶片。
 
@@ -206,9 +207,11 @@ tests/test_caption_queue.py  YouTube 字幕模式的翻譯排隊（不啟動翻�
 tests/test_chunking.mjs  錄音頁切段的單元測試：背景一直有聲音時也要在句子停頓處切（不需要瀏覽器和模型）
 tests/test_native_host.py  照瀏覽器的方式從註冊位置啟動本機程式、交換訊息（Linux、Windows 都能跑；GitHub Actions 在 Windows 上跑）
 tests/e2e_youtube_cc.mjs  YouTube 字幕模式：假的 YouTube 觀看頁，檢查自動打開 CC、整部進文字稿、跟著影片時間走、不重複、不錄音
+tests/windows_as_user.ps1  GitHub Actions 用：建一般權限的本機帳號，用它執行 Setup.exe 和測試（測試機本身是系統管理員）
+tools/demo_screenshot.mjs  README 開頭的使用畫面：實際錄一段影片、翻譯，把網頁和側邊欄的截圖拼成一張
 install.sh     Linux、macOS 的安裝；install.ps1 是 Windows 的（install.cmd 點兩下執行它）
 installer/TabTranscriber.iss  Windows 安裝檔（Inno Setup）：複製檔案後執行 install.ps1；GitHub Actions 編譯，推 v* tag 時放上 Release
-.github/workflows/install.yml  Linux 單元測試、macOS 和 Windows 的安裝測試（Windows 是編出 Setup.exe 再靜默安裝）
+.github/workflows/install.yml  Linux 單元測試、macOS 和 Windows 的安裝測試（Windows 是編出 Setup.exe，用一般使用者帳號靜默安裝）
 docs/research/ 選型筆記與速度量測（中文）
 ```
 

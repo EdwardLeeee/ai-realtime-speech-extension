@@ -4,9 +4,9 @@ English | [繁體中文](README.zh-TW.md)
 
 A Brave/Chrome extension that turns English, Japanese or Thai audio playing in a browser tab (practice sites, YouTube, Twitch, podcast pages…) into a timestamped transcript with live captions, and can add Traditional Chinese translations underneath:
 
-![Live recording: the playing video on the left with on-page captions floating below it (previous and current sentence, each with a Chinese translation); the side panel on the right with the bilingual transcript and the proper-noun field](docs/images/demo.png)
+![Live recording: the playing video on the left with on-page captions floating below it (the current sentence with its Chinese translation); the side panel on the right with the bilingual transcript, the proper-noun field and the switches](docs/images/demo.png)
 
-<sub>Real screenshot (RTX 2060, large-v3-turbo, bilingual captions on). Video shown: *Tears of Steel* © Blender Foundation | [mango.blender.org](https://mango.blender.org), [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/).</sub>
+<sub>Real screenshot (RTX 2060, large-v3-turbo, bilingual captions on; taken with `tools/demo_screenshot.mjs`). Video shown: *Tears of Steel* © Blender Foundation | [mango.blender.org](https://mango.blender.org), [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/).</sub>
 
 ```
 [00:00] They must go by the mail, she thought, and how funny it'll seem to send shoes to one's own feet, how odd the address will look.
@@ -26,7 +26,8 @@ The extension's interface is in Traditional Chinese; this README gives the Chine
 
 - Windows 10/11 x64, an Apple Silicon Mac (M1 or later) with macOS 14+, or Linux x86-64.
   - The author uses it on Ubuntu (RTX 2060 6 GB).
-  - The Windows and macOS versions have so far only been tested on GitHub's test machines (install, transcription and translation on the CPU, no discrete GPU), not yet on users' computers.
+  - Windows: GitHub's test machines install it as a standard (non-administrator) user and test transcription and translation (on the CPU, no discrete GPU). Not yet tested on users' computers.
+  - macOS has only been tested on GitHub's test machines (install, transcription and translation), not yet on users' computers.
 - Brave, Chrome, Chromium or Edge (tested on Brave 155).
 - An NVIDIA GPU (Windows, Linux) makes it much faster and enables the large-v3-turbo model; without one the small model runs on the CPU, slower and with more mistakes. On a Mac, Whisper runs on the CPU and the translation model uses the Mac's GPU.
 
@@ -208,9 +209,11 @@ tests/test_caption_queue.py  Translation queue for YouTube captions mode (no tra
 tests/test_chunking.mjs  Unit test for where the recorder splits audio, including with constant background sound (no browser or model needed)
 tests/test_native_host.py  Starts the local program from its registration like a browser would and exchanges messages (Linux and Windows; GitHub Actions runs it on Windows)
 tests/e2e_youtube_cc.mjs  YouTube captions mode on a mock YouTube watch page: CC turned on automatically, whole video in the transcript, follows video time, no duplicates, no recording
+tests/windows_as_user.ps1  For GitHub Actions: creates a standard local account and runs Setup.exe and the tests as it (the test machine itself is an administrator)
+tools/demo_screenshot.mjs  The screenshot at the top of this README: records and translates a real video clip, then puts the page and side panel side by side
 install.sh     Install for Linux and macOS; install.ps1 is the Windows one (install.cmd runs it on double-click)
 installer/TabTranscriber.iss  Windows installer (Inno Setup): copies files, then runs install.ps1; built by GitHub Actions and attached to the Release on v* tags
-.github/workflows/install.yml  Linux unit tests plus macOS and Windows install tests (Windows builds Setup.exe and installs it silently)
+.github/workflows/install.yml  Linux unit tests plus macOS and Windows install tests (Windows builds Setup.exe and installs it silently as a standard user)
 docs/research/ Research notes and measurements (in Chinese)
 ```
 
