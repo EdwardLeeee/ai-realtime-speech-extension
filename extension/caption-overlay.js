@@ -48,7 +48,7 @@
       flex-direction: column;
       box-sizing: border-box;
       max-width: min(92vw, 40em);
-      padding: 0.45em 2em 0.5em 1em;
+      padding: 0.45em calc(44px + 0.3em) 0.5em 1em; /* 右邊讓出 ×（離右緣 16px、寬 28px），長句的第一行才不會壓到它 */
       border-radius: 10px;
       background: rgb(12 12 12 / 0.74);
       color: #fff;

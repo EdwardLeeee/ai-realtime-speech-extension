@@ -220,6 +220,19 @@ try {
     check(sorted.length >= 3 && sorted[sorted.length >> 1] <= 60 && sorted.at(-1) <= 150,
       `網頁字幕在一句開始時就換（${sorted.length} 句，晚 ${lags.join('、')} 毫秒）`);
 
+    // 長句的第一行不能壓到右上角的 ×（0.6.4 把 × 往左移、讓出角落給改大小的把手以後壓到過）
+    const long = 'I heard you guys talking last night. It is not my fault, you know, and nobody told me anything about it.';
+    await evaluate(panel, `chrome.tabs.query({ url: ${JSON.stringify(pageUrl)} }).then(([t]) => chrome.tabs.sendMessage(t.id,
+      { target: 'overlay', type: 'update', lines: [{ text: ${JSON.stringify(long)}, tr: '' }] }, { frameId: 0 }))`);
+    const overlap = await evaluate(page, `(() => {
+      const root = document.querySelector('tab-transcriber-caption').shadowRoot;
+      const x = root.querySelector('.close').getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(root.querySelector('.line:last-child'));
+      return [...range.getClientRects()].some((r) => r.right > x.left && r.left < x.right && r.bottom > x.top && r.top < x.bottom);
+    })()`);
+    check(!overlap, '長句的網頁字幕沒有壓到右上角的 ×');
+
     log('往回拖到 1 秒');
     await evaluate(page, `document.querySelector('video').currentTime = 1`);
     await sleep(1500);
