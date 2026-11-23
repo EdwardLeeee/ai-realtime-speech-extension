@@ -136,7 +136,7 @@ Notes:
 ## Bilingual captions
 
 - Turn on the "雙語字幕" (bilingual captions) switch in the side panel to translate the original into Traditional Chinese under each sentence; the live caption gets a translated line too. The switch is remembered and can be toggled while recording.
-- The translation model loads when you first turn it on; "載入翻譯模型…" (loading translation model) shows next to the switch for about 2–5 seconds. After that, a translation appears about 0.5–1 seconds after each sentence is finalised, and the live caption's translation lags the original by under a second.
+- The translation model loads when you first turn it on; "載入翻譯模型…" (loading translation model) shows next to the switch for about 2–5 seconds. After that, a translation usually appears about 0.4 seconds after each sentence is finalised (see "Measurements"), and the live caption's translation lags the original by under a second.
 - English and Japanese are translated once a sentence ends (. ? ! 。), so the translation appears under the last line of the sentence. Lines ending in a comma wait, so half sentences aren't translated. Thai hardly uses punctuation, so each line is translated on its own; when a sentence is split into two lines, the two translations may not read smoothly.
 - Only sentences after the switch is turned on are translated; earlier ones are not back-filled. With the switch off, the screen, Copy and Download show only the original; translations already made are kept and reappear when you turn it back on.
 - On CPU only, live captions are not translated (about 3 seconds per sentence can't keep up with once-a-second updates); only finalised lines are.
@@ -147,7 +147,7 @@ Notes:
 
 Measured with 0.7.0 on the author's machine (RTX 2060 6 GB, 12-thread CPU, Ubuntu). The audio is read speech from Google's [FLEURS](https://huggingface.co/datasets/google/fleurs) dataset: one speaker, clean recording, no music. Real videos with music, overlapping speakers or accents will have more errors. Method and more numbers are in section 17 of the [research notes](docs/research/2026-10-tab-transcription.md) (Chinese); the benchmark scripts and raw data are in `docs/research/tab-transcription/`.
 
-**Accuracy**: FLEURS test set, 349 English, 317 Japanese and 335 Thai sentences (about an hour each), through the extension's actual transcription path. Word error rate for English, character error rate for Japanese and Thai; lower is better.
+**Accuracy**: FLEURS test set, 349 English, 317 Japanese and 335 Thai sentences (about an hour each). Each sentence is given whole to the local program, with the same transcription settings as the extension but without the chunking done while recording; in real recordings, sentences cut in the middle occasionally lose words, about one percentage point more errors for English (research notes, section 17). Word error rate for English, character error rate for Japanese and Thai; lower is better.
 
 | Language | With a GPU (`large-v3-turbo`) | CPU only (`small.en` / `small`) |
 |---|---|---|
@@ -157,7 +157,7 @@ Measured with 0.7.0 on the author's machine (RTX 2060 6 GB, 12-thread CPU, Ubunt
 
 - Most errors are names, places and loanwords, e.g. "Scotturb" became "Scott Turb", "シェンゲン" (Schengen) became "宣言" (declaration).
 - Some of the Thai errors are only a different way of writing the same thing: numbers as digits ("หนึ่งในเจ็ด" became "1 ใน 7") or foreign names in Latin letters. Leaving those sentences out, Thai is 10.2%.
-- Transcription speed: 15–28 times faster than playback with a GPU, 2–6 times on CPU only.
+- Transcription speed on these short sentences (about 10 seconds on average): 15–28 times faster than playback with a GPU, 2–6 times on CPU only.
 - Thai on CPU only makes many mistakes and occasionally turns a whole sentence into garbage; 17 of 335 sentences took longer to transcribe than the audio itself (the slowest, 23 seconds of audio, took 54 seconds), so captions can fall behind.
 
 **How long captions take**: 25 sentences played through the real extension, with about 3 seconds between sentences. Median / slowest.
@@ -170,7 +170,7 @@ Measured with 0.7.0 on the author's machine (RTX 2060 6 GB, 12-thread CPU, Ubunt
 
 - With a GPU, the live caption appears 1–2 seconds after someone starts talking and updates about once a second; on CPU only the median is about 3 seconds. The first version often has mistakes that get corrected.
 - Final lines wait for a pause, and a chunk must be at least 6 seconds long before it is cut. When a speaker pauses mid-sentence, the rest of the sentence waits until its chunk reaches 6 seconds; if that part is short and the next sentence starts, both are finalised together after the next sentence ends (15 seconds in the slowest case). The live caption keeps showing in the meantime. About half of the English sentences were cut mid-sentence, which is why English is slower than Japanese and Thai.
-- Bilingual captions don't slow transcription down (English measured with them on and off). The Chinese usually appears about 0.4 seconds after the final line.
+- Bilingual captions don't slow transcription down: the same English audio with them on and off gave the same medians for live captions and final lines (one run of 25 sentences each). The Chinese usually appears about 0.4 seconds after the final line.
 
 **Memory**: with a GPU, Whisper uses about 2.2 GB of video memory and bilingual captions add about 1.9 GB; the local program uses at most about 1.8 GB of RAM (about 1.3 GB on CPU only).
 

@@ -5,7 +5,7 @@
 
 用法：host/.venv/bin/python -I docs/research/tab-transcription/bench_accuracy.py <FLEURS 語言資料夾> <en|ja|th> \
         [--model large-v3-turbo] [--device cuda|cpu] [--out bench-accuracy.jsonl]
-  語言資料夾：test.tsv 加上 wav/（解壓好的音檔；同一句只取第一個人念的、25 秒以內，見研究筆記第 17 節）
+  語言資料夾：test.tsv 加上 wav/（解壓好的音檔，全部解壓也可以；同一句只取 tsv 裡第一個人念的，超過 25 秒的整句不取）
   顯示卡要照 host/run_host.sh 設好 LD_LIBRARY_PATH。
 FLEURS：https://huggingface.co/datasets/google/fleurs（CC BY 4.0）
 """
@@ -88,10 +88,12 @@ def main():
     joiner = host.JOINERS.get(args.lang, " ")
     rows, seen = [], set()
     for line in (args.folder / "test.tsv").read_text(encoding="utf-8").splitlines():
-        sid, fname, raw, *_ = line.split("\t")
-        if sid in seen or not (wavs / fname).exists():
+        sid, fname, raw, _norm, _chars, samples, *_ = line.split("\t")
+        if sid in seen:
             continue
-        seen.add(sid)
+        seen.add(sid)  # 同一句有好幾個人念，只取 tsv 裡第一個
+        if int(samples) > 25 * RATE or not (wavs / fname).exists():
+            continue  # 插件一段最長 25 秒，比這長的整句不取
         if args.limit and len(rows) >= args.limit:
             break
         audio = decode_audio(str(wavs / fname), sampling_rate=RATE)

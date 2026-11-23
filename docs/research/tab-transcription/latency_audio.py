@@ -31,10 +31,12 @@ def select(folder, n):
 
     rows, seen = [], set()
     for line in (folder / "test.tsv").read_text(encoding="utf-8").splitlines():
-        sid, name, raw, *_ = line.split("\t")
-        if sid in seen or not (folder / "wav" / name).exists():
+        sid, name, raw, _norm, _chars, samples, *_ = line.split("\t")
+        if sid in seen:
             continue
-        seen.add(sid)
+        seen.add(sid)  # 同一句有好幾個人念，只取 tsv 裡第一個；超過 25 秒的整句不取（同 bench_accuracy.py）
+        if int(samples) > 25 * RATE or not (folder / "wav" / name).exists():
+            continue
         rows.append((sid, name, raw))
     loud = []
     for sid, name, raw in rows:

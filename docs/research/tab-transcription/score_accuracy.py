@@ -12,8 +12,11 @@
 日文、泰文另外算「排除寫法不同的句子」的錯誤率：阿拉伯數字或拉丁字母只出現在參考答案和轉出文字的其中一邊
 （例如泰文「หนึ่งในเจ็ด」轉成「1 ใน 7」、人名寫成拉丁字母或片假名），這種句子的錯誤有一部分只是寫法不同。
 
+--stream：拿 bench_latency.mjs 的原始紀錄（latency-raw/*.json），把真的插件定稿的文字全部接起來，和同一批句子的原文接起來比，
+旁邊列出同一批句子整句單獨轉（bench-accuracy.jsonl）的錯誤率，看錄音頁切段造成多少差別。
+
 用法：uv run --no-project --with whisper-normalizer==1.0.1 python -I docs/research/tab-transcription/score_accuracy.py \
-        [bench-accuracy.jsonl] [--worst 5]
+        [bench-accuracy.jsonl] [--worst 5] [--stream latency-raw/gpu-en-on.json ...]
 """
 
 import argparse
@@ -54,6 +57,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("file", nargs="?", type=Path, default=Path(__file__).resolve().parent / "bench-accuracy.jsonl")
     ap.add_argument("--worst", type=int, default=5, help="每組列出錯最多的幾句")
+    ap.add_argument("--stream", nargs="*", type=Path, default=[], help="bench_latency.mjs 的原始紀錄")
     args = ap.parse_args()
 
     from whisper_normalizer.english import EnglishTextNormalizer
@@ -89,6 +93,17 @@ def main():
         print(f"| {lang} | {model} | {device} | {len(rows)} | {rate:.1%} | {'WER' if lang == 'en' else 'CER'} | "
               f"{'-' if lang == 'en' else len(rows) - len(same)} | {'-' if lang == 'en' else f'{rest:.1%}'} | "
               f"{speed} | {s.get('median_s', '-')} | {s.get('max_s', '-')} | {vram} | {s.get('rss_peak_mib', '-')} MiB |")
+    for path in args.stream:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        lang = path.stem.split("-")[1]
+        device = "cpu" if path.stem.startswith("cpu") else "cuda"
+        ids = [c["id"] for c in raw["clips"]]
+        ref = units(" ".join(c["ref"] for c in raw["clips"]), lang)
+        hyp = units(" ".join(g["text"] for g in raw["rec"]["segments"]), lang)
+        stream = edit_distance(ref, hyp) / len(ref)
+        whole = [r for key, rows in groups.items() if key[0] == lang and key[2] == device for r in rows if r["id"] in ids]
+        whole_rate = sum(r["errors"] for r in whole) / sum(r["units"] for r in whole) if whole else float("nan")
+        print(f"{path.name}：插件定稿接起來 {stream:.1%}，同 {len(whole)} 句整句單獨轉 {whole_rate:.1%}")
     for key, rows in groups.items():
         print(f"\n## {' / '.join(key)}：錯最多的 {args.worst} 句（錯誤數／長度）")
         for r in sorted(rows, key=lambda r: r["errors"] / max(r["units"], 1), reverse=True)[:args.worst]:
