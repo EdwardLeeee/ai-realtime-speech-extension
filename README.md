@@ -143,6 +143,37 @@ Notes:
 - The translator is a small 1.8B model and makes mistakes, occasionally reversing the meaning. Examples seen in testing: Thai "unlikely to be prosecuted" translated as "may be prosecuted", Japanese "モズ" (shrike) as "owl", and the name "ゴン" as "戈恩" or "岡". Treat translations as a reference.
 - Recognition errors in the original carry over into the translation.
 
+## Measurements
+
+Measured with 0.7.0 on the author's machine (RTX 2060 6 GB, 12-thread CPU, Ubuntu). The audio is read speech from Google's [FLEURS](https://huggingface.co/datasets/google/fleurs) dataset: one speaker, clean recording, no music. Real videos with music, overlapping speakers or accents will have more errors. Method and more numbers are in section 17 of the [research notes](docs/research/2026-10-tab-transcription.md) (Chinese); the benchmark scripts and raw data are in `docs/research/tab-transcription/`.
+
+**Accuracy**: FLEURS test set, 349 English, 317 Japanese and 335 Thai sentences (about an hour each), through the extension's actual transcription path. Word error rate for English, character error rate for Japanese and Thai; lower is better.
+
+| Language | With a GPU (`large-v3-turbo`) | CPU only (`small.en` / `small`) |
+|---|---|---|
+| English | 4.5% | 5.7% |
+| Japanese | 4.9% | 12.2% |
+| Thai | 12.7% | 23.7% |
+
+- Most errors are names, places and loanwords, e.g. "Scotturb" became "Scott Turb", "シェンゲン" (Schengen) became "宣言" (declaration).
+- Some of the Thai errors are only a different way of writing the same thing: numbers as digits ("หนึ่งในเจ็ด" became "1 ใน 7") or foreign names in Latin letters. Leaving those sentences out, Thai is 10.2%.
+- Transcription speed: 15–28 times faster than playback with a GPU, 2–6 times on CPU only.
+- Thai on CPU only makes many mistakes and occasionally turns a whole sentence into garbage; 17 of 335 sentences took longer to transcribe than the audio itself (the slowest, 23 seconds of audio, took 54 seconds), so captions can fall behind.
+
+**How long captions take**: 25 sentences played through the real extension, with about 3 seconds between sentences. Median / slowest.
+
+| | English | Japanese | Thai | English, CPU only |
+|---|---|---|---|---|
+| Speech starts → live caption appears | 1.3 / 1.8 s | 1.5 / 1.8 s | 1.1 / 3.0 s | 2.8 / 7.1 s |
+| Speech ends → final line | 3.2 / 15 s | 1.6 / 4.7 s | 2.0 / 11.9 s | 5.1 / 13.1 s |
+| Speech ends → Chinese appears (bilingual) | 3.5 / 16.1 s | 2.0 / 5.1 s | 2.5 / 12.4 s | — |
+
+- With a GPU, the live caption appears 1–2 seconds after someone starts talking and updates about once a second; on CPU only the median is about 3 seconds. The first version often has mistakes that get corrected.
+- Final lines wait for a pause, and a chunk must be at least 6 seconds long before it is cut. When a speaker pauses mid-sentence, the rest of the sentence waits until its chunk reaches 6 seconds; if that part is short and the next sentence starts, both are finalised together after the next sentence ends (15 seconds in the slowest case). The live caption keeps showing in the meantime. About half of the English sentences were cut mid-sentence, which is why English is slower than Japanese and Thai.
+- Bilingual captions don't slow transcription down (English measured with them on and off). The Chinese usually appears about 0.4 seconds after the final line.
+
+**Memory**: with a GPU, Whisper uses about 2.2 GB of video memory and bilingual captions add about 1.9 GB; the local program uses at most about 1.8 GB of RAM (about 1.3 GB on CPU only).
+
 ## Changing models
 
 To change models, create `~/.config/tab-transcriber/config.json` (Windows: `%USERPROFILE%\.config\tab-transcriber\config.json`) with only the parts you want to change. `gpu_models` is used with a GPU and `models` on CPU only:
@@ -161,7 +192,7 @@ Speed measured on the author's machine (RTX 2060 / 12-thread CPU):
 | `small.en` (CPU-only default, English) | CPU | ~10 s | 1.3–2.1 s | Captions update about every 2 seconds |
 | `small` (CPU-only default, Japanese) | CPU | ~12 s | not measured | Some mistakes, e.g. "穴から**はい出ました**" (crawled out of the hole) became "穴から入れました" (put into the hole) |
 
-Thai character error rate on 40 sentences from Google FLEURS (lower is better):
+Thai models compared by character error rate on 40 sentences from Google FLEURS (lower is better; for comparing models only, see "Measurements" above for the default model on the full test set):
 
 | Model | Runs on | Character error rate | Time to transcribe 60 s | Notes |
 |---|---|---|---|---|
