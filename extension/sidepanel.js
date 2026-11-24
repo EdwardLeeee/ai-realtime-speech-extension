@@ -281,10 +281,12 @@ $('bilingual').addEventListener('change', (e) => chrome.storage.local.set({ bili
 $('overlay').addEventListener('change', (e) => chrome.storage.local.set({ overlay: e.target.checked }));
 $('yt-captions').addEventListener('change', (e) => chrome.storage.local.set({ ytCaptions: e.target.checked }));
 // 專有名詞：停止打字 0.6 秒後存；錄音中背景程式會把新的名單交給本機程式，下一句就生效。
+// 打字當下就記住內容：游標不在這一格時，畫面一更新（錄音中常常更新）就會把格子改回存好的舊值，0.6 秒後才讀會讀到舊值。
 $('hints').addEventListener('input', (e) => {
   clearTimeout(hintsTimer);
   const lang = $('language').value;
-  hintsTimer = setTimeout(() => chrome.storage.local.set({ hints: { ...hints, [lang]: e.target.value.trim() } }), 600);
+  const text = e.target.value.trim();
+  hintsTimer = setTimeout(() => chrome.storage.local.set({ hints: { ...hints, [lang]: text } }), 600);
 });
 
 $('toggle').addEventListener('click', async () => {
