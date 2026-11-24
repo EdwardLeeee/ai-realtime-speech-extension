@@ -419,7 +419,9 @@ try {
     await resetSize();
     const reset = await info();
     const cleared = !(await evaluate(panel.sessionId, `chrome.storage.local.get('overlaySize')`)).overlaySize;
-    check(!reset.sized && reset.h < big.h - 40 && cleared && (await evaluate(ps, `window.__clicks`)) === 0,
+    // 自動大小最高約 7.5 行（.lines 的 max-height）：開始拉時字少、恢復時字變多，恢復後只會比拉大後矮 38 左右，
+    // 以前要求矮 40，字幕換得勤的時候會失敗（0.7.1 新版 4 次失敗 2 次）
+    check(!reset.sized && reset.h < big.h - 20 && cleared && (await evaluate(ps, `window.__clicks`)) === 0,
       `右下角按兩下恢復自動大小（高 ${reset.h.toFixed(0)}）`);
 
     // 拖左上角：往左上拉大，右下角不動
@@ -452,7 +454,7 @@ try {
       const shrunk = await resizeBy(-120, -50);
       check(
         grown.ok && shrunk.ok,
-        `全螢幕時拖右下角可以放大也可以縮小（寬 ${grown.from.w.toFixed(0)}→${grown.to.w.toFixed(0)}→${shrunk.to.w.toFixed(0)}）`,
+        `全螢幕時拖右下角可以放大也可以縮小（寬 ${grown.from.w.toFixed(0)}→${grown.to.w.toFixed(0)}→${shrunk.to.w.toFixed(0)}，高 ${grown.from.h.toFixed(0)}→${grown.to.h.toFixed(0)}→${shrunk.to.h.toFixed(0)}）`,
       );
       const edge = await info();
       await mouse('mousePressed', edge.cx, edge.bottom - 3);

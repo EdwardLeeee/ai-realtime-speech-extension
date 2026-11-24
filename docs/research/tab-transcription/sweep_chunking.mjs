@@ -25,6 +25,7 @@ const { values: opt, positionals } = parseArgs({
     pause: { type: 'string', default: '0.6,0.8,1.0,1.5' },
     'cpu-min': { type: 'string' },
     voiced: { type: 'string', default: '0' }, // 停頓切的時候這段至少要有幾秒「有人聲」（逗號分開可以比好幾個）
+    speech: { type: 'string' }, // 混了背景聲時，乾淨講話裡哪些 0.1 秒有講話（{"voiced": [0/1, …]}）：等待和送出比例改用這個算
     json: { type: 'boolean', default: false },
   },
 });
@@ -115,7 +116,8 @@ const fmt = (x) => (x === null ? '—' : x.toFixed(1));
 
 const pcm = readWav(positionals[0]);
 const clips = opt.clips ? JSON.parse(fs.readFileSync(opt.clips, 'utf8')).clips : null;
-const loud = loudBlocks(pcm);
+const ref = opt.speech ? JSON.parse(fs.readFileSync(opt.speech, 'utf8')).voiced : null;
+const loud = ref ? ref.flatMap((v, b) => (v ? [(b + 1) * BLOCK_S] : [])) : loudBlocks(pcm);
 const rules = [['0.7.0（至少 6 秒）', null, 0, 0]];
 for (const v of opt.voiced.split(',').map(Number)) {
   for (const x of opt.pause.split(',')) rules.push([`停頓 ${x} 秒就切${v ? `（人聲 ≥ ${v} 秒）` : ''}`, Number(x), 0, v]);
@@ -130,6 +132,7 @@ for (const [label, pause, minS, voicedS] of rules) {
   const waits = loud.map((t) => chunks.find((c) => c.start < t && t <= c.end + 1e-6)).map((c, i) => (c ? c.closed - loud[i] : null))
     .filter((x) => x !== null);
   const row = { label, chunks: chunks.length, median_len: q(lengths, 0.5), short: lengths.filter((x) => x < 2).length, dropped: resets.length,
+    sent: waits.length / loud.length,
     wait_median: q(waits, 0.5), wait_p90: q(waits, 0.9), wait_max: q(waits, 1) };
   if (clips) {
     const endWait = clips.map((s) => chunks.find((c) => c.start <= s.end && s.end <= c.end + 0.05)).map((c, i) => (c ? c.closed - clips[i].end : null));
@@ -145,9 +148,9 @@ if (opt.json) {
   console.log(JSON.stringify(rows));
 } else {
   console.log(`${positionals[0]}（${(pcm.length / RATE).toFixed(0)} 秒）`);
-  console.log('| 規則 | 段數 | 段長中位數 | 不到 2 秒 | 沒送出 | 等待中位數 | 九成 | 最慢 |' + (clips ? ' 句尾等待中位數 | 最慢 | 超過 3 秒 | 被切開的句子 | 沒送出在句子裡 |' : ''));
+  console.log('| 規則 | 段數 | 段長中位數 | 不到 2 秒 | 沒送出 | 送出的人聲 | 等待中位數 | 九成 | 最慢 |' + (clips ? ' 句尾等待中位數 | 最慢 | 超過 3 秒 | 被切開的句子 | 沒送出在句子裡 |' : ''));
   for (const r of rows) {
-    console.log(`| ${r.label} | ${r.chunks} | ${fmt(r.median_len)} | ${r.short} | ${r.dropped} | ${fmt(r.wait_median)} | ${fmt(r.wait_p90)} | ${fmt(r.wait_max)} |`
+    console.log(`| ${r.label} | ${r.chunks} | ${fmt(r.median_len)} | ${r.short} | ${r.dropped} | ${(r.sent * 100).toFixed(0)}% | ${fmt(r.wait_median)} | ${fmt(r.wait_p90)} | ${fmt(r.wait_max)} |`
       + (clips ? ` ${fmt(r.end_median)} | ${fmt(r.end_max)} | ${r.end_over3} | ${r.split} | ${r.dropped_in_speech} |` : ''));
   }
 }
