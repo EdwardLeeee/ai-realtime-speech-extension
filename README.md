@@ -97,7 +97,7 @@ Notes:
 - Changing pages in the recorded tab (another YouTube video, another page on the same site, or a different site) does not stop the recording; transcription follows the new page and the on-page captions reappear there. Everything goes into the same transcript, still titled with the page where recording started.
 - To start recording a tab you must click the toolbar icon on that tab first (browsers only let extensions capture tabs the user has invoked them on). After that, as long as you stay on the same site, you can stop and press "開始" (Start) in the side panel to record again; after moving to a different site, click the icon again.
 - Only one tab is recorded at a time. Clicking the icon on another tab while recording only opens the side panel; press Stop first, then click the icon on the new tab.
-- A pause of more than 0.4 seconds in the middle of a sentence occasionally splits it into two lines (e.g. `look through to` / `the garden with one eye.`); the text itself is unaffected.
+- A pause of 0.6 seconds or more in the middle of a sentence (0.4 seconds once a chunk is already 6 seconds long) may split it into two lines (e.g. `look through to` / `the garden with one eye.`).
 - With constant background sound (esports casts, crowds, game audio, background music) lines are still split at pauses in speech, so finished lines don't wait for the 25-second maximum.
 - Transcripts are stored in the browser and survive closing the side panel or restarting the browser; they are only deleted with "清除" (Clear).
 - In videos with a lot of music or singing and little speech, Whisper sometimes produces sentences nobody said; in Japanese a common one is "ご視聴ありがとうございました". This is a known Whisper problem. The program limits how long such output can get: a segment with only a second or two of speech used to stall for about 10 seconds and now takes about 2; segments with more speech can still stall for 4–5 seconds. The phantom sentences can still appear.
@@ -145,7 +145,7 @@ Notes:
 
 ## Measurements
 
-Measured with 0.7.0 on the author's machine (RTX 2060 6 GB, 12-thread CPU, Ubuntu). The audio is read speech from Google's [FLEURS](https://huggingface.co/datasets/google/fleurs) dataset: one speaker, clean recording, no music. Real videos with music, overlapping speakers or accents will have more errors. Method and more numbers are in section 17 of the [research notes](docs/research/2026-10-tab-transcription.md) (Chinese); the benchmark scripts and raw data are in `docs/research/tab-transcription/`.
+Measured on the author's machine (RTX 2060 6 GB, 12-thread CPU, Ubuntu): accuracy with 0.7.0, caption timing with 0.7.1. The audio is read speech from Google's [FLEURS](https://huggingface.co/datasets/google/fleurs) dataset: one speaker, clean recording, no music. Real videos with music, overlapping speakers or accents will have more errors. Method and more numbers are in sections 17 and 18 of the [research notes](docs/research/2026-10-tab-transcription.md) (Chinese); the benchmark scripts and raw data are in `docs/research/tab-transcription/`.
 
 **Accuracy**: FLEURS test set, 349 English, 317 Japanese and 335 Thai sentences (about an hour each). Each sentence is given whole to the local program, with the same transcription settings as the extension but without the chunking done while recording; in real recordings, sentences cut in the middle occasionally lose words, about one percentage point more errors for English (research notes, section 17). Word error rate for English, character error rate for Japanese and Thai; lower is better.
 
@@ -164,12 +164,13 @@ Measured with 0.7.0 on the author's machine (RTX 2060 6 GB, 12-thread CPU, Ubunt
 
 | | English | Japanese | Thai | English, CPU only |
 |---|---|---|---|---|
-| Speech starts → live caption appears | 1.3 / 1.8 s | 1.5 / 1.8 s | 1.1 / 3.0 s | 2.8 / 7.1 s |
-| Speech ends → final line | 3.2 / 15 s | 1.6 / 4.7 s | 2.0 / 11.9 s | 5.1 / 13.1 s |
-| Speech ends → Chinese appears (bilingual) | 3.5 / 16.1 s | 2.0 / 5.1 s | 2.5 / 12.4 s | — |
+| Speech starts → live caption appears | 1.3 / 1.7 s | 1.5 / 1.9 s | 1.1 / 2.1 s | 2.7 / 6.5 s |
+| Speech ends → final line | 1.7 / 10.8 s | 1.4 / 2.9 s | 2.2 / 4.1 s | 4.1 / 12.7 s |
+| Speech ends → Chinese appears (bilingual) | 2.1 / 11.2 s | 1.8 / 3.4 s | 2.5 / 5.5 s | — |
 
 - With a GPU, the live caption appears 1–2 seconds after someone starts talking and updates about once a second; on CPU only the median is about 3 seconds. The first version often has mistakes that get corrected.
-- Final lines wait for a pause, and a chunk must be at least 6 seconds long before it is cut. When a speaker pauses mid-sentence, the rest of the sentence waits until its chunk reaches 6 seconds; if that part is short and the next sentence starts, both are finalised together after the next sentence ends (15 seconds in the slowest case). The live caption keeps showing in the meantime. About half of the English sentences were cut mid-sentence, which is why English is slower than Japanese and Thai.
+- Final lines wait for a pause: a 0.6-second pause finalises the chunk once it has at least a second of speech. If only a word or two is left (under a second of speech), or the pause still has background sound, it waits until the chunk reaches 6 seconds or the next sentence ends, about 11 seconds at worst; the live caption keeps showing in the meantime.
+- 0.7.0 always waited for a 6-second chunk; on the same English audio it took 3.2 / 15 seconds from speech end to final line (section 17). The change shows no measurable accuracy difference and is not slower on CPU only (research notes, section 18).
 - Bilingual captions don't slow transcription down: the same English audio with them on and off gave the same medians for live captions and final lines (one run of 25 sentences each). The Chinese usually appears about 0.4 seconds after the final line.
 
 **Memory**: with a GPU, Whisper uses about 2.2 GB of video memory and bilingual captions add about 1.9 GB; the local program uses at most about 1.8 GB of RAM (about 1.3 GB on CPU only).

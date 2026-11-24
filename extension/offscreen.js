@@ -3,7 +3,12 @@
 const RATE = 16000;
 const BLOCK = 1600; // 每塊 100 ms，和 pcm-worklet.js 一致
 const BLOCK_S = BLOCK / RATE;
-const MIN_CHUNK_BLOCKS = 60; // 一段至少 6 秒才開始找停頓切
+const MIN_CHUNK_BLOCKS = 60; // 一段至少 6 秒才開始找停頓切（Whisper 每段有固定成本；太短的段落沒有上下文，人名容易轉錯）
+// 例外：停頓滿 0.6 秒、這段又有 1 秒以上的人聲，就不等湊滿 6 秒直接切，一句講完約 1–2 秒就定稿。
+// 以前句尾剩下的半句要等湊滿 6 秒，太短還會併到下一句，講完要 3–16 秒才定稿（研究筆記第 18 節）。
+// 人聲的條件是給很吵的時候：人聲斷斷續續，每停一次就切的話，每段人聲都不到 0.3 秒，會被當成雜音丟掉。
+const PAUSE_BLOCKS = 6;
+const PAUSE_VOICED_BLOCKS = 10;
 const MAX_CHUNK_BLOCKS = 250; // 最長 25 秒，到了就在最後 3 秒內最安靜的地方切
 const GAP_BLOCKS = 4; // 連續 0.4 秒安靜算一個停頓
 const LEAD_BLOCKS = 5; // 還沒出聲前最多保留 0.5 秒
@@ -101,7 +106,8 @@ function onBlock(c, samples) {
   if (!c.loud.includes(true)) {
     // 還沒出聲：只留最後一小段當開頭，時間軸照樣往前走。
     if (n > LEAD_BLOCKS) emit(c, n - LEAD_BLOCKS);
-  } else if (n >= MIN_CHUNK_BLOCKS && c.silentRun >= GAP_BLOCKS) {
+  } else if ((n >= MIN_CHUNK_BLOCKS && c.silentRun >= GAP_BLOCKS)
+    || (c.silentRun >= PAUSE_BLOCKS && c.loud.filter(Boolean).length >= PAUSE_VOICED_BLOCKS)) {
     emit(c, n);
   } else if (n >= MAX_CHUNK_BLOCKS) {
     let cut = n - 30;

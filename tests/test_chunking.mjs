@@ -41,13 +41,13 @@ function withNoise({ pcm, phrases }, snr) {
   return { pcm: pcm.map((v) => v + level * gauss()), phrases };
 }
 
-async function run(pcm) {
+async function run(pcm, { timed = false } = {}) {
   const sent = [];
-  let listener, node;
+  let listener, node, block = 0;
   const context = vm.createContext({
     btoa,
     console,
-    chrome: { runtime: { onMessage: { addListener: (f) => (listener = f) }, sendMessage: async (m) => sent.push(m) } },
+    chrome: { runtime: { onMessage: { addListener: (f) => (listener = f) }, sendMessage: async (m) => sent.push({ ...m, at: (block + 1) * BLOCK / RATE }) } },
     navigator: {
       mediaDevices: {
         getUserMedia: async () => ({ getTracks: () => [], getAudioTracks: () => [{ addEventListener() {} }] }),
@@ -69,11 +69,11 @@ async function run(pcm) {
   });
   vm.runInContext(source, context);
   await new Promise((resolve) => listener({ target: 'offscreen', type: 'start', streamId: 'x' }, null, resolve));
-  for (let i = 0; i + BLOCK <= pcm.length; i += BLOCK) node.port.onmessage({ data: pcm.slice(i, i + BLOCK) });
+  for (let i = 0; i + BLOCK <= pcm.length; i += BLOCK, block++) node.port.onmessage({ data: pcm.slice(i, i + BLOCK) });
   listener({ target: 'offscreen', type: 'stop' });
-  return sent
-    .filter((m) => m.type === 'chunk')
-    .map((m) => [m.offset, m.offset + Buffer.from(m.pcm, 'base64').length / 2 / RATE]);
+  const chunks = sent.filter((m) => m.type === 'chunk');
+  if (timed) return chunks.map((m) => ({ end: m.offset + Buffer.from(m.pcm, 'base64').length / 2 / RATE, at: m.at }));
+  return chunks.map((m) => [m.offset, m.offset + Buffer.from(m.pcm, 'base64').length / 2 / RATE]);
 }
 
 let failed = 0;
@@ -97,6 +97,33 @@ for (const [label, audio] of [
     `送出 ${covered}/${audio.phrases.length} 句`);
   check(median(lengths) < 12, `${label}：在句子停頓處切段，不會每段都拖到最長 25 秒`);
   check(covered === audio.phrases.length, `${label}：每句都有送去轉文字`);
+}
+
+// 一句講完、停頓夠久就送出，不用等這段湊滿 6 秒：2.5 秒的短句後面接 4 秒安靜
+{
+  const pcm = new Float32Array(8 * RATE);
+  for (let t = 0.5; t < 3.0; t += 0.2) {
+    const start = Math.floor(t * RATE), n = Math.floor(0.15 * RATE);
+    for (let i = 0; i < n; i++) pcm[start + i] = 0.14 * Math.sin((Math.PI * i) / n) * gauss();
+  }
+  const [first] = await run(pcm, { timed: true });
+  console.log(`短句：第一段在 ${first?.at.toFixed(1)} 秒送出`);
+  check(first && first.at <= 2.95 + 0.6 + 0.2, '短句講完停頓 0.6 秒就送出，不用等湊滿 6 秒');
+}
+// 很吵的時候只聽得到零星的字（每次 0.2 秒、中間停 0.7 秒）：不能每停一次就切一段，
+// 否則每段有聲音都不到 0.3 秒，全部被當成雜音丟掉（真的錄音混進和講話一樣大的雜訊時看過，研究筆記第 18 節）
+{
+  const pcm = new Float32Array(16 * RATE);
+  const bursts = [];
+  for (let t = 0.5; t < 12; t += 0.9) {
+    bursts.push(t + 0.1);
+    const start = Math.floor(t * RATE), n = Math.floor(0.2 * RATE);
+    for (let i = 0; i < n; i++) pcm[start + i] = 0.14 * Math.sin((Math.PI * i) / n) * gauss();
+  }
+  const chunks = await run(pcm);
+  const kept = bursts.filter((t) => chunks.some(([a, b]) => a <= t && t <= b)).length;
+  console.log(`零星的字：${chunks.length} 段，送出 ${kept}/${bursts.length} 個`);
+  check(kept === bursts.length, '零星的字不會被一段段切開後丟掉');
 }
 if (failed) {
   console.log(`${failed} 項失敗`);

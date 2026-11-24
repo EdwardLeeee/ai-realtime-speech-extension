@@ -33,6 +33,8 @@ const { values: opt } = parseArgs({
     out: { type: 'string', default: path.join(HERE, 'bench-latency.jsonl') },
     raw: { type: 'string' }, // 另外存原始紀錄（每句時間、側邊欄的每次變化、播放時間對照），可以事後重算
     reanalyze: { type: 'string' }, // 只拿 --raw 存的原始紀錄重算，不開瀏覽器
+    extension: { type: 'string', default: path.join(ROOT, 'extension') }, // 改過的插件複本（比較不同的切段規則）
+    label: { type: 'string', default: '' }, // 寫進結果，分辨是哪一版
     times: { type: 'string' }, // 重算時換掉每句的開始和結束（latency_audio.py 不給輸出檔時印的 JSON）
   },
 });
@@ -277,7 +279,7 @@ function analyze(events, map, clips, rec) {
 
 let ok = false;
 try {
-  const { id } = await cdp('Extensions.loadUnpacked', { path: path.join(ROOT, 'extension') });
+  const { id } = await cdp('Extensions.loadUnpacked', { path: path.resolve(opt.extension) });
   if (id !== EXPECTED_ID) throw new Error(`插件 ID 不對：${id}`);
   const page = await openTab(pageUrl);
   const panel = await openTab(`chrome-extension://${id}/sidepanel.html`);
@@ -354,7 +356,7 @@ try {
   const { per, lines, summary } = analyze(events, map, clips, rec);
   const commit = spawnSync('git', ['-C', ROOT, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
   const row = {
-    lang: opt.lang, bilingual: opt.bilingual === 'on', model: st.model, device: st.device,
+    lang: opt.lang, label: opt.label, bilingual: opt.bilingual === 'on', model: st.model, device: st.device,
     translator: opt.bilingual === 'on' ? st.translatorDevice : null, clips: clips.length, gap_s: Number(opt.gap),
     ...summary, vram_mib: vram, host_commit: commit, date: new Date().toLocaleDateString('sv-SE'), per, lines,
   };
